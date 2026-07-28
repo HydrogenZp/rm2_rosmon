@@ -594,36 +594,45 @@ def test_codex_model_picker_selects_installed_model_and_updates_prompt():
 
     ui.open_codex_model_picker()
     picker = ANSI_RE.sub('', '\n'.join(ui._codex_panel_lines(100)))
-    assert 'Model' in picker
-    assert 'Codex default' in picker
-    assert '> GPT-5.5 (CLI default)' in picker
-    assert 'GPT-5.3-Codex' in picker
+    assert 'Agent settings' in picker
+    assert '> Models › — GPT-5.5' in picker
+    assert 'Permissions › — Full access' in picker
+    assert 'Log in' in picker
+    assert 'GPT-5.3-Codex' not in picker
 
-    ui.move_codex_model_selection(2)
-    ui.apply_codex_model_selection()
+    assert ui.apply_codex_model_selection() is None
+    assert ui.codex_model_picker_stage == 'model'
+    models = ANSI_RE.sub('', '\n'.join(ui._codex_panel_lines(100)))
+    assert 'Codex default' in models
+    assert '> GPT-5.5 (CLI default)' in models
+    assert 'GPT-5.3-Codex' in models
+    choices = ui._codex_picker_choices()
+    ui.codex_model_picker_selected = next(
+        index for index, choice in enumerate(choices)
+        if choice['kind'] == 'model'
+        and choice['model'] == 'gpt-5.3-codex'
+    )
+    assert ui.apply_codex_model_selection() is None
 
     assert ui.codex_selected_model == 'gpt-5.3-codex'
     assert ui.codex_model_picker_active
-    assert ui.codex_model_picker_stage == 'access'
-    access = ANSI_RE.sub('', '\n'.join(ui._codex_panel_lines(100)))
-    assert 'Access — step 2 of 3' in access
-    assert 'Approve for me' in access
-    assert '> Full access' in access
+    assert ui.codex_model_picker_stage == 'root'
 
-    ui.move_codex_model_selection(-1)
-    ui.apply_codex_model_selection()
+    ui.codex_model_picker_selected = 1
+    assert ui.apply_codex_model_selection() is None
+    assert ui.codex_model_picker_stage == 'access'
+    choices = ui._codex_picker_choices()
+    ui.codex_model_picker_selected = next(
+        index for index, choice in enumerate(choices)
+        if choice['kind'] == 'access'
+        and choice['mode'] == 'approve-for-me'
+    )
+    assert ui.apply_codex_model_selection() is None
 
     assert ui.codex_access_mode == 'approve-for-me'
     assert ui.codex_model_picker_active
-    assert ui.codex_model_picker_stage == 'account'
-    account = ANSI_RE.sub('', '\n'.join(ui._codex_panel_lines(100)))
-    assert 'Account — step 3 of 3' in account
-    assert '> Continue' in account
-    assert 'Log in' in account
-    assert 'Log out' in account
-
-    assert ui.apply_codex_model_selection() is None
-    assert not ui.codex_model_picker_active
+    assert ui.codex_model_picker_stage == 'root'
+    ui.close_codex_model_picker()
     selected = ANSI_RE.sub('', '\n'.join(ui._codex_panel_lines(100)))
     assert selected.splitlines()[-1].endswith('F2: GPT-5.3-Codex  --%')
 
@@ -632,16 +641,19 @@ def test_codex_account_picker_returns_login_and_logout_actions():
     ui = TerminalUI(False, lambda _key: None)
 
     ui.open_codex_model_picker()
-    ui.apply_codex_model_selection()
-    ui.apply_codex_model_selection()
-    ui.move_codex_model_selection(1)
+    ui.codex_model_picker_selected = next(
+        index for index, choice in enumerate(ui._codex_picker_choices())
+        if choice.get('action') == 'login'
+    )
     assert ui.apply_codex_model_selection() == 'login'
     assert not ui.codex_model_picker_active
 
+    ui.set_codex_login_state(True)
     ui.open_codex_model_picker()
-    ui.apply_codex_model_selection()
-    ui.apply_codex_model_selection()
-    ui.move_codex_model_selection(2)
+    ui.codex_model_picker_selected = next(
+        index for index, choice in enumerate(ui._codex_picker_choices())
+        if choice.get('action') == 'logout'
+    )
     assert ui.apply_codex_model_selection() == 'logout'
     assert not ui.codex_model_picker_active
 
@@ -667,9 +679,20 @@ def test_codex_model_and_access_selection_persist_across_launches(tmp_path):
     ])
 
     ui.open_codex_model_picker()
-    ui.move_codex_model_selection(2)
     ui.apply_codex_model_selection()
-    ui.move_codex_model_selection(-1)
+    ui.codex_model_picker_selected = next(
+        index for index, choice in enumerate(ui._codex_picker_choices())
+        if choice['kind'] == 'model'
+        and choice['model'] == 'gpt-5.3-codex'
+    )
+    ui.apply_codex_model_selection()
+    ui.codex_model_picker_selected = 1
+    ui.apply_codex_model_selection()
+    ui.codex_model_picker_selected = next(
+        index for index, choice in enumerate(ui._codex_picker_choices())
+        if choice['kind'] == 'access'
+        and choice['mode'] == 'approve-for-me'
+    )
     ui.apply_codex_model_selection()
 
     assert settings_path.is_file()
@@ -703,6 +726,7 @@ def test_codex_model_picker_loading_state_keeps_default_available():
     ui = TerminalUI(False, lambda _key: None)
     ui.set_codex_models_loading(True)
     ui.open_codex_model_picker()
+    ui.apply_codex_model_selection()
 
     picker = ANSI_RE.sub('', '\n'.join(ui._codex_panel_lines(80)))
 
@@ -830,6 +854,7 @@ def test_diagnosis_f2_model_picker_keeps_diagnosis_table_visible():
     }])
     ui.open_diagnosis()
     ui.open_codex_model_picker()
+    ui.apply_codex_model_selection()
 
     panel = ANSI_RE.sub('', '\n'.join(ui._diagnosis_panel_lines(120)))
 

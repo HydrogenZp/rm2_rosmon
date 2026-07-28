@@ -256,6 +256,31 @@ def test_f4_opens_and_closes_codex_without_losing_selected_node():
     assert supervisor.ui.selected == 0
 
 
+def test_f4_logged_out_highlights_enter_to_login(monkeypatch):
+    supervisor = Supervisor('', [], ui=False, control=False)
+    supervisor._codex_logged_in = False
+    supervisor.ui.set_codex_login_state(False)
+    actions = []
+    monkeypatch.setattr(
+        supervisor,
+        '_start_codex_auth',
+        lambda action, *, mode: actions.append((action, mode)),
+    )
+
+    supervisor.handle_key('F4')
+
+    assert supervisor.ui.codex_active
+    assert supervisor.ui.codex_model_picker_active
+    selected = supervisor.ui._codex_picker_choices()[
+        supervisor.ui.codex_model_picker_selected]
+    assert selected['action'] == 'login'
+
+    supervisor.handle_key('\n')
+
+    assert actions == [('login', 'agent')]
+    assert not supervisor.ui.codex_model_picker_active
+
+
 def test_agent_arrow_keys_scroll_while_query_is_running():
     supervisor = Supervisor('', [], ui=False, control=False)
     supervisor.ui.codex_active = True
@@ -290,15 +315,21 @@ def test_agent_f2_picker_and_model_command_choose_a_model():
 
     supervisor.handle_key('F2')
     assert supervisor.ui.codex_model_picker_active
+    supervisor.handle_key('\n')
+    assert supervisor.ui.codex_model_picker_stage == 'model'
     supervisor.handle_key('DOWN')
     supervisor.handle_key('\n')
     assert supervisor.ui.codex_selected_model == 'gpt-5.4'
+    assert supervisor.ui.codex_model_picker_stage == 'root'
+
+    supervisor.handle_key('DOWN')
+    supervisor.handle_key('\n')
     assert supervisor.ui.codex_model_picker_stage == 'access'
     supervisor.handle_key('UP')
     supervisor.handle_key('\n')
     assert supervisor.ui.codex_access_mode == 'approve-for-me'
-    assert supervisor.ui.codex_model_picker_stage == 'account'
-    supervisor.handle_key('\n')
+    assert supervisor.ui.codex_model_picker_stage == 'root'
+    supervisor.handle_key('ESC')
     assert not supervisor.ui.codex_model_picker_active
 
     for character in '/model':
@@ -321,10 +352,12 @@ def test_f2_account_picker_routes_login_action(monkeypatch):
     )
 
     supervisor.handle_key('F2')
-    supervisor.handle_key('\n')
-    supervisor.handle_key('\n')
-    assert supervisor.ui.codex_model_picker_stage == 'account'
-    supervisor.handle_key('DOWN')
+    supervisor.ui.codex_model_picker_selected = next(
+        index
+        for index, choice in enumerate(
+            supervisor.ui._codex_picker_choices())
+        if choice.get('action') == 'login'
+    )
     supervisor.handle_key('\n')
 
     assert actions == [('login', 'agent')]
@@ -354,7 +387,7 @@ def test_codex_account_commands_stream_login_and_logout_output(
 
     calls = []
     outputs = iter((
-        ['Open https://auth.openai.com/device', 'Code: ABCD-EFGH'],
+        ['Opening browser for ChatGPT authentication'],
         ['Logged out'],
     ))
 
@@ -373,17 +406,82 @@ def test_codex_account_commands_stream_login_and_logout_output(
     asyncio.run(supervisor._run_codex_auth('login', mode='agent'))
     asyncio.run(supervisor._run_codex_auth('logout', mode='agent'))
 
-    assert calls[0][0] == ('codex', 'login', '--device-auth')
+    assert calls[0][0] == ('codex', 'login')
     assert calls[1][0] == ('codex', 'logout')
     assert calls[0][1]['stdin'] is asyncio.subprocess.DEVNULL
     transcript = '\n'.join(
         message for _speaker, message in supervisor.ui.codex_messages)
-    assert 'https://auth.openai.com/device' in transcript
-    assert 'Code: ABCD-EFGH' in transcript
+    assert 'Opening the browser for Codex login' in transcript
+    assert 'Opening browser for ChatGPT authentication' in transcript
     assert 'Codex login completed' in transcript
     assert 'Codex logout completed' in transcript
+    assert supervisor._codex_logged_in is False
     assert not supervisor.ui.codex_running
     assert supervisor._codex_auth_process is None
+
+
+def test_codex_login_status_updates_cached_authentication(
+        monkeypatch, tmp_path):
+    class StatusProcess:
+        def __init__(self, returncode):
+            self.returncode = returncode
+
+        async def communicate(self):
+            return b'', b''
+
+    calls = []
+    returncodes = iter((0, 1))
+
+    async def fake_subprocess(*args, **kwargs):
+        calls.append((args, kwargs))
+        return StatusProcess(next(returncodes))
+
+    monkeypatch.setattr(
+        'rosmon2.supervisor.shutil.which', lambda _command: '/usr/bin/codex')
+    monkeypatch.setattr(
+        'rosmon2.supervisor.asyncio.create_subprocess_exec', fake_subprocess)
+    supervisor = Supervisor(
+        '', [], ui=False, control=False, codex_workspace=str(tmp_path))
+
+    assert asyncio.run(supervisor._refresh_codex_login_status()) is True
+    assert asyncio.run(supervisor._refresh_codex_login_status()) is False
+
+    assert [call[0] for call in calls] == [
+        ('codex', 'login', 'status'),
+        ('codex', 'login', 'status'),
+    ]
+
+
+def test_logged_out_agent_request_asks_for_login():
+    supervisor = Supervisor('', [], ui=False, control=False)
+    supervisor.ui.codex_active = True
+    supervisor._codex_logged_in = False
+    supervisor.ui.codex_prompt = 'inspect the robot driver'
+
+    supervisor.handle_key('\n')
+
+    assert supervisor._codex_task is None
+    assert supervisor.ui.codex_prompt == 'inspect the robot driver'
+    assert list(supervisor.ui.codex_messages)[-1] == (
+        'Codex',
+        '- Please log in before talking to the Agent. '
+        'Press F2 and select Log in.',
+    )
+
+
+def test_logged_out_diagnosis_does_not_start_lifecycle_agent():
+    supervisor = Supervisor('', [], ui=False, control=False)
+    supervisor.ui.diagnosis_active = True
+    supervisor._codex_logged_in = False
+
+    supervisor._queue_diagnosis_agent('initial diagnosis check')
+
+    assert supervisor._diagnosis_task is None
+    assert list(supervisor.ui.diagnosis_messages)[-1] == (
+        'Codex',
+        '- Please log in before talking to the Agent. '
+        'Press F2 and select Log in.',
+    )
 
 
 def test_diagnosis_f2_picker_changes_shared_model():
@@ -404,15 +502,15 @@ def test_diagnosis_f2_picker_changes_shared_model():
 
     supervisor.handle_key('F2')
     assert supervisor.ui.codex_model_picker_active
+    supervisor.handle_key('\n')
+    assert supervisor.ui.codex_model_picker_stage == 'model'
     supervisor.handle_key('DOWN')
     supervisor.handle_key('\n')
 
     assert supervisor.ui.codex_selected_model == 'gpt-5.4'
-    assert supervisor.ui.codex_model_picker_stage == 'access'
-    supervisor.handle_key('\n')
-    assert supervisor.ui.codex_model_picker_stage == 'account'
-    supervisor.handle_key('\n')
     assert supervisor.ui.diagnosis_active
+    assert supervisor.ui.codex_model_picker_stage == 'root'
+    supervisor.handle_key('ESC')
     assert not supervisor.ui.codex_model_picker_active
 
 

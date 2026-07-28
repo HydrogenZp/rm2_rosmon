@@ -225,6 +225,7 @@ class Supervisor:
         self._codex_usage_process = None
         self._codex_auth_task: Optional[asyncio.Task] = None
         self._codex_auth_process = None
+        self._codex_logged_in: Optional[bool] = None
         self._diagnosis_task: Optional[asyncio.Task] = None
         self._diagnosis_process = None
         self._diagnosis_cancel_requested = False
@@ -285,6 +286,8 @@ class Supervisor:
                 control_started = True
             self.ui.start(loop)
             self.ui.set_records(self.records)
+            if self.ui.enabled:
+                await self._refresh_codex_login_status()
             self._emit_event(
                 'session_started',
                 launch_file=self.launch_file,
@@ -453,8 +456,7 @@ class Supervisor:
                 self._cancel_diagnosis()
                 self._cancel_diagnosis_poll()
                 self.ui.close_diagnosis()
-                self.ui.open_codex()
-                self._request_codex_usage()
+                self._open_codex()
                 return
             self._handle_diagnosis_key(key)
             return
@@ -474,8 +476,7 @@ class Supervisor:
             return
 
         if key == 'F4':
-            self.ui.open_codex()
-            self._request_codex_usage()
+            self._open_codex()
             return
 
         if self.ui.search_active:
@@ -599,6 +600,13 @@ class Supervisor:
         self._queue_diagnosis_agent('initial diagnosis check')
         self._schedule_diagnosis_poll()
 
+    def _open_codex(self) -> None:
+        """Open Agent and expose one-key browser login when signed out."""
+        self.ui.open_codex()
+        if self._codex_logged_in is False:
+            self.ui.open_codex_login_option()
+        self._request_codex_usage()
+
     def _handle_diagnosis_key(self, key: str) -> None:
         """Chat about diagnosis or control the selected unhealthy node."""
         if key == 'F3':
@@ -609,8 +617,11 @@ class Supervisor:
             self.ui.close_diagnosis()
             return
         if self.ui.codex_model_picker_active:
-            if key in ('F2', 'ESC'):
+            if key == 'F2':
                 self.ui.close_codex_model_picker()
+            elif key == 'ESC':
+                if not self.ui.back_codex_model_picker():
+                    self.ui.close_codex_model_picker()
             elif key == 'UP':
                 self.ui.move_codex_model_selection(-1)
             elif key == 'DOWN':
@@ -649,6 +660,8 @@ class Supervisor:
                     question
                     and self._codex_task is None
                     and self._codex_auth_task is None):
+                if not self._codex_login_available('diagnosis'):
+                    return
                 self._codex_yes_no_pending = False
                 self._codex_yes_no_mode = None
                 self._codex_pending_fix_question = ''
@@ -923,6 +936,8 @@ class Supervisor:
         """Coalesce lifecycle changes while one diagnosis turn is running."""
         if not self.ui.diagnosis_active:
             return
+        if not self._codex_login_available('diagnosis'):
+            return
         if self._diagnosis_task is not None:
             self._diagnosis_pending_reasons.add(reason)
             return
@@ -1081,8 +1096,57 @@ class Supervisor:
         self._codex_auth_task = loop.create_task(
             self._run_codex_auth(action, mode=mode))
 
+    def _codex_login_available(self, mode: str) -> bool:
+        """Explain the login requirement before starting an Agent request."""
+        if self._codex_logged_in is not False:
+            return True
+        message = (
+            '- Please log in before talking to the Agent. '
+            'Press F2 and select Log in.'
+        )
+        messages = (
+            self.ui.diagnosis_messages
+            if mode == 'diagnosis' else
+            self.ui.codex_messages
+        )
+        if not messages or messages[-1] != ('Codex', message):
+            self._chat_add_message(mode, 'Codex', message)
+        self._chat_set_running(mode, False)
+        return False
+
+    async def _refresh_codex_login_status(self) -> Optional[bool]:
+        """Refresh cached authentication state using the Codex CLI."""
+        process = None
+        try:
+            if shutil.which(self.codex_command) is None:
+                self._codex_logged_in = None
+                self.ui.set_codex_login_state(None)
+                return None
+            process = await asyncio.create_subprocess_exec(
+                self.codex_command,
+                'login',
+                'status',
+                cwd=str(self.codex_workspace),
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await asyncio.wait_for(process.communicate(), timeout=5.0)
+            self._codex_logged_in = process.returncode == 0
+            self.ui.set_codex_login_state(self._codex_logged_in)
+        except (FileNotFoundError, OSError, asyncio.TimeoutError):
+            self._codex_logged_in = None
+            self.ui.set_codex_login_state(None)
+            if process is not None and process.returncode is None:
+                try:
+                    process.terminate()
+                except ProcessLookupError:
+                    pass
+                await process.wait()
+        return self._codex_logged_in
+
     async def _run_codex_auth(self, action: str, *, mode: str) -> None:
-        """Run Codex device login or logout and show its output in the panel."""
+        """Run browser login or logout and show its output in the panel."""
         process = None
         label = (
             'Logging in to Codex'
@@ -1090,8 +1154,6 @@ class Supervisor:
             'Logging out of Codex'
         )
         command = [self.codex_command, action]
-        if action == 'login':
-            command.append('--device-auth')
         try:
             if shutil.which(self.codex_command) is None:
                 raise FileNotFoundError(
@@ -1100,7 +1162,8 @@ class Supervisor:
                 mode,
                 'Codex',
                 (
-                    '- Starting Codex device login. Follow the URL and code below.'
+                    '- Opening the browser for Codex login. '
+                    'Complete sign-in in the browser.'
                     if action == 'login' else
                     '- Removing the stored Codex login.'
                 ),
@@ -1130,9 +1193,13 @@ class Supervisor:
                     f'- Codex {action} failed with exit code {return_code}.',
                 )
             elif action == 'login':
+                self._codex_logged_in = True
+                self.ui.set_codex_login_state(True)
                 self._chat_add_message(
                     mode, 'Codex', '- Codex login completed.')
             else:
+                self._codex_logged_in = False
+                self.ui.set_codex_login_state(False)
                 self.ui.set_codex_usage(None)
                 self._chat_add_message(
                     mode, 'Codex', '- Codex logout completed.')
@@ -1386,8 +1453,11 @@ class Supervisor:
             self.ui.close_codex()
             return
         if self.ui.codex_model_picker_active:
-            if key in ('F2', 'ESC'):
+            if key == 'F2':
                 self.ui.close_codex_model_picker()
+            elif key == 'ESC':
+                if not self.ui.back_codex_model_picker():
+                    self.ui.close_codex_model_picker()
             elif key == 'UP':
                 self.ui.move_codex_model_selection(-1)
             elif key == 'DOWN':
@@ -1424,6 +1494,8 @@ class Supervisor:
                     question
                     and self._codex_task is None
                     and self._codex_auth_task is None):
+                if not self._codex_login_available('agent'):
+                    return
                 self._codex_yes_no_pending = False
                 self._codex_yes_no_mode = None
                 self._codex_pending_fix_question = ''

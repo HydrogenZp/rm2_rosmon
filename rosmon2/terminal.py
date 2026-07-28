@@ -141,7 +141,7 @@ class TerminalUI:
     CODEX_SPINNER_INTERVAL = 0.12
     CODEX_SPINNER_FRAMES = ('⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏')
     CODEX_VISIBLE_LINES = 16
-    CODEX_MODEL_VISIBLE_ROWS = 6
+    CODEX_MODEL_VISIBLE_ROWS = 8
     DEFAULT_CODEX_MODEL = 'gpt-5.5'
     DEFAULT_CODEX_MODEL_LABEL = 'GPT-5.5'
     DEFAULT_CODEX_ACCESS_MODE = 'full-access'
@@ -193,8 +193,9 @@ class TerminalUI:
         self.codex_selected_model: Optional[str] = self.DEFAULT_CODEX_MODEL
         self.codex_model_picker_active = False
         self.codex_model_picker_selected = 0
-        self.codex_model_picker_stage = 'model'
+        self.codex_model_picker_stage = 'root'
         self.codex_access_mode = self.DEFAULT_CODEX_ACCESS_MODE
+        self.codex_logged_in: Optional[bool] = None
         self.agent_settings_path = (
             Path(agent_settings_path).expanduser()
             if agent_settings_path is not None else None
@@ -293,7 +294,7 @@ class TerminalUI:
         self.codex_active = True
         self.codex_prompt = ''
         self.codex_model_picker_active = False
-        self.codex_model_picker_stage = 'model'
+        self.codex_model_picker_stage = 'root'
         if not self.codex_running:
             self.codex_status = 'Ready — ask about the selected node'
         self.redraw()
@@ -303,7 +304,7 @@ class TerminalUI:
         self.codex_active = False
         self.codex_prompt = ''
         self.codex_model_picker_active = False
-        self.codex_model_picker_stage = 'model'
+        self.codex_model_picker_stage = 'root'
         self.redraw()
 
     def open_diagnosis(self) -> None:
@@ -312,7 +313,7 @@ class TerminalUI:
         self.diagnosis_prompt = ''
         self.diagnosis_chat_focused = False
         self.codex_model_picker_active = False
-        self.codex_model_picker_stage = 'model'
+        self.codex_model_picker_stage = 'root'
         self.diagnosis_selected = min(
             self.diagnosis_selected, max(0, len(self.diagnosis_rows) - 1))
         self.redraw()
@@ -322,7 +323,7 @@ class TerminalUI:
         self.diagnosis_active = False
         self.diagnosis_chat_focused = False
         self.codex_model_picker_active = False
-        self.codex_model_picker_stage = 'model'
+        self.codex_model_picker_stage = 'root'
         self.redraw()
 
     def set_diagnosis_rows(self, rows) -> None:
@@ -459,12 +460,18 @@ class TerminalUI:
         available = {item['model'] for item in cleaned}
         if self.codex_selected_model not in available:
             self.codex_selected_model = None
-        self.codex_model_picker_selected = self._codex_model_choice_index(
-            self.codex_selected_model)
+        if self.codex_model_picker_stage == 'model':
+            self.codex_model_picker_selected = self._codex_model_choice_index(
+                self.codex_selected_model)
         self.redraw()
 
     def set_codex_models_loading(self, loading: bool) -> None:
         self.codex_models_loading = loading
+        self.redraw()
+
+    def set_codex_login_state(self, logged_in: Optional[bool]) -> None:
+        """Update the account action shown in the F2 settings menu."""
+        self.codex_logged_in = logged_in
         self.redraw()
 
     def _codex_model_choices(self):
@@ -516,51 +523,89 @@ class TerminalUI:
             },
         ]
 
-    @staticmethod
-    def _codex_account_choices():
-        return [
-            {
-                'action': 'continue',
-                'display_name': 'Continue',
-                'description': 'Keep the current Codex login',
-            },
-            {
-                'action': 'login',
-                'display_name': 'Log in',
-                'description': 'Sign in with Codex device authentication',
-            },
-            {
+    def _codex_account_choices(self):
+        if self.codex_logged_in is True:
+            return [{
                 'action': 'logout',
                 'display_name': 'Log out',
                 'description': 'Remove the stored Codex login',
+            }]
+        return [{
+                'action': 'login',
+                'display_name': 'Log in',
+                'description': 'Open the browser to sign in to Codex',
+        }]
+
+    def _codex_picker_root_choices(self):
+        account = self._codex_account_choices()[0]
+        return [
+            {
+                'kind': 'models',
+                'display_name': 'Models',
+                'description': self.codex_model_label(),
             },
+            {
+                'kind': 'permissions',
+                'display_name': 'Permissions',
+                'description': next(
+                    choice['display_name']
+                    for choice in self._codex_access_choices()
+                    if choice['mode'] == self.codex_access_mode
+                ),
+            },
+            {'kind': 'account', **account},
         ]
 
-    def _codex_access_choice_index(self) -> int:
-        for index, choice in enumerate(self._codex_access_choices()):
-            if choice['mode'] == self.codex_access_mode:
-                return index
-        return 0
+    def _codex_picker_choices(self):
+        """Return choices for the active F2 settings category."""
+        if self.codex_model_picker_stage == 'model':
+            return [
+                {'kind': 'model', **choice}
+                for choice in self._codex_model_choices()
+            ]
+        if self.codex_model_picker_stage == 'access':
+            return [
+                {'kind': 'access', **choice}
+                for choice in self._codex_access_choices()
+            ]
+        return self._codex_picker_root_choices()
 
     def open_codex_model_picker(self) -> None:
         self.codex_model_picker_active = True
-        self.codex_model_picker_stage = 'model'
-        self.codex_model_picker_selected = self._codex_model_choice_index(
-            self.codex_selected_model)
+        self.codex_model_picker_stage = 'root'
+        self.codex_model_picker_selected = 0
+        self.redraw()
+
+    def open_codex_login_option(self) -> None:
+        """Open Agent settings with the current account action highlighted."""
+        self.open_codex_model_picker()
+        self.codex_model_picker_selected = next(
+            (
+                index
+                for index, choice in enumerate(
+                    self._codex_picker_root_choices())
+                if choice['kind'] == 'account'
+            ),
+            0,
+        )
         self.redraw()
 
     def close_codex_model_picker(self) -> None:
         self.codex_model_picker_active = False
-        self.codex_model_picker_stage = 'model'
+        self.codex_model_picker_stage = 'root'
         self.redraw()
 
+    def back_codex_model_picker(self) -> bool:
+        """Return to settings categories, or report that the picker should close."""
+        if self.codex_model_picker_stage == 'root':
+            return False
+        self.codex_model_picker_stage = 'root'
+        self.codex_model_picker_selected = 0
+        self.redraw()
+        return True
+
     def move_codex_model_selection(self, amount: int) -> None:
-        if self.codex_model_picker_stage == 'access':
-            choices = self._codex_access_choices()
-        elif self.codex_model_picker_stage == 'account':
-            choices = self._codex_account_choices()
-        else:
-            choices = self._codex_model_choices()
+        choices = self._codex_picker_choices()
         if not choices:
             return
         self.codex_model_picker_selected = max(
@@ -573,35 +618,43 @@ class TerminalUI:
         self.redraw()
 
     def apply_codex_model_selection(self) -> Optional[str]:
-        if self.codex_model_picker_stage == 'model':
-            choices = self._codex_model_choices()
-            if choices:
-                index = min(
-                    self.codex_model_picker_selected, len(choices) - 1)
-                self.codex_selected_model = choices[index]['model']
-            self.codex_model_picker_stage = 'access'
-            self.codex_model_picker_selected = (
-                self._codex_access_choice_index())
-        elif self.codex_model_picker_stage == 'access':
-            choices = self._codex_access_choices()
-            if choices:
-                index = min(
-                    self.codex_model_picker_selected, len(choices) - 1)
-                self.codex_access_mode = choices[index]['mode']
-            self._save_agent_settings()
-            self.codex_model_picker_stage = 'account'
-            self.codex_model_picker_selected = 0
-        else:
-            choices = self._codex_account_choices()
-            index = min(
-                self.codex_model_picker_selected, len(choices) - 1)
-            action = choices[index]['action']
-            self.codex_model_picker_active = False
+        choices = self._codex_picker_choices()
+        if not choices:
+            return None
+        index = min(self.codex_model_picker_selected, len(choices) - 1)
+        choice = choices[index]
+        action = None
+        if choice['kind'] == 'models':
             self.codex_model_picker_stage = 'model'
-            self.redraw()
-            return None if action == 'continue' else action
+            self.codex_model_picker_selected = self._codex_model_choice_index(
+                self.codex_selected_model)
+        elif choice['kind'] == 'permissions':
+            self.codex_model_picker_stage = 'access'
+            self.codex_model_picker_selected = next(
+                (
+                    index
+                    for index, access in enumerate(
+                        self._codex_access_choices())
+                    if access['mode'] == self.codex_access_mode
+                ),
+                0,
+            )
+        elif choice['kind'] == 'model':
+            self.codex_selected_model = choice['model']
+            self._save_agent_settings()
+            self.codex_model_picker_stage = 'root'
+            self.codex_model_picker_selected = 0
+        elif choice['kind'] == 'access':
+            self.codex_access_mode = choice['mode']
+            self._save_agent_settings()
+            self.codex_model_picker_stage = 'root'
+            self.codex_model_picker_selected = 1
+        else:
+            action = choice['action']
+            self.codex_model_picker_active = False
+            self.codex_model_picker_stage = 'root'
         self.redraw()
-        return None
+        return action
 
     def _start_codex_spinner(self) -> None:
         """Animate Codex activity without blocking launch or log processing."""
@@ -1249,6 +1302,7 @@ class TerminalUI:
             self.codex_model_picker_selected,
             self.codex_model_picker_stage,
             self.codex_access_mode,
+            self.codex_logged_in,
             self._codex_spinner_index,
             self.codex_scroll_offset,
             tuple(self.codex_messages),
@@ -1514,15 +1568,8 @@ class TerminalUI:
         return lines
 
     def _codex_model_picker_lines(self, columns: int):
-        """Render the model, access, and account selector."""
-        access_stage = self.codex_model_picker_stage == 'access'
-        account_stage = self.codex_model_picker_stage == 'account'
-        if access_stage:
-            choices = self._codex_access_choices()
-        elif account_stage:
-            choices = self._codex_account_choices()
-        else:
-            choices = self._codex_model_choices()
+        """Render settings categories or one nested settings list."""
+        choices = self._codex_picker_choices()
         selected = min(
             self.codex_model_picker_selected, max(0, len(choices) - 1))
         self.codex_model_picker_selected = selected
@@ -1530,27 +1577,39 @@ class TerminalUI:
         start = max(0, selected - visible_count + 1)
         start = min(start, max(0, len(choices) - visible_count))
         visible = choices[start:start + visible_count]
-        if access_stage:
-            title = ' Access — step 2 of 3'
-        elif account_stage:
-            title = ' Account — step 3 of 3'
+        if self.codex_model_picker_stage == 'model':
+            title = ' Models'
+        elif self.codex_model_picker_stage == 'access':
+            title = ' Permissions'
         else:
-            title = ' Model — step 1 of 3'
-        if self.codex_models_loading and not access_stage and not account_stage:
+            title = ' Agent settings'
+        if (
+                self.codex_models_loading
+                and self.codex_model_picker_stage == 'model'):
             title += ' — loading available models…'
         lines = [self._fit(self.BAR + title + self.RESET, columns)]
         for offset, choice in enumerate(visible):
             index = start + offset
             marker = '>' if index == selected else ' '
             suffix = ''
-            if access_stage:
+            if choice['kind'] == 'models':
+                text = (
+                    f' {marker} {choice["display_name"]} › — '
+                    f'{choice["description"]}'
+                )
+            elif choice['kind'] == 'permissions':
+                text = (
+                    f' {marker} {choice["display_name"]} › — '
+                    f'{choice["description"]}'
+                )
+            elif choice['kind'] == 'access':
                 if choice['mode'] == self.codex_access_mode:
                     suffix = ' (current)'
                 text = (
                     f' {marker} {choice["display_name"]} — '
                     f'{choice["description"]}{suffix}'
                 )
-            elif account_stage:
+            elif choice['kind'] == 'account':
                 text = (
                     f' {marker} {choice["display_name"]} — '
                     f'{choice["description"]}'
@@ -1563,8 +1622,8 @@ class TerminalUI:
             lines.append(self._fit(style + text + self.RESET, columns))
         controls = (
             ' ↑/↓: select  Enter: choose  Esc: close'
-            if account_stage else
-            ' ↑/↓: select  Enter: next  Esc: close'
+            if self.codex_model_picker_stage == 'root' else
+            ' ↑/↓: select  Enter: choose  Esc: back'
         )
         lines.append(self._fit(self.BAR + controls + self.RESET, columns))
         return lines
