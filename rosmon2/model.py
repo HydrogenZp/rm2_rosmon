@@ -30,6 +30,7 @@ class ProcessRecord:
     manually_stopped: bool = False
     restart_count: int = 0
     return_code: Optional[int] = None
+    agent_created: bool = False
 
 
 def selection_key(index: int) -> Optional[str]:

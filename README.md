@@ -11,10 +11,51 @@ an independent ROS 2 implementation and does not require ROS 1.
 
 ## Screenshot
 
-![rosmon2 terminal process monitor](docs/rosmon2-terminal.png)
+![rosmon2 terminal process monitor](docs/terminal.png)
 
 
 ## Installation and quick start
+
+### Install with pip
+
+`rosmon2` uses the ROS 2 Python launch APIs, so install ROS 2 first and source
+the selected distribution before running it. A pip installation installs
+`rosmon2`; it does not install ROS 2 itself.
+
+Published releases can be installed from PyPI:
+
+```bash
+source /opt/ros/${ROS_DISTRO}/setup.bash
+python3 -m pip install rosmon2
+```
+
+Until the first PyPI release is published, install the current `main` branch
+directly from GitHub:
+
+```bash
+source /opt/ros/${ROS_DISTRO}/setup.bash
+python3 -m pip install \
+  'git+https://github.com/GibsonHu/rosmon2.git@main'
+```
+
+When using a virtual environment, expose both the system ROS packages and the
+virtual environment's ament resource index:
+
+```bash
+python3 -m venv --system-site-packages ~/.venvs/rosmon2
+source ~/.venvs/rosmon2/bin/activate
+source /opt/ros/${ROS_DISTRO}/setup.bash
+export AMENT_PREFIX_PATH="$VIRTUAL_ENV${AMENT_PREFIX_PATH:+:$AMENT_PREFIX_PATH}"
+python -m pip install rosmon2
+```
+
+Then launch the included demo:
+
+```bash
+mon2 launch rosmon2 demo.launch.py
+```
+
+### Install in a ROS workspace
 
 Add this repository to a ROS 2 workspace, install its dependencies, and build
 it with `colcon`:
@@ -55,6 +96,33 @@ The `rosmon2` executable is an alias for `mon2`, so this is equivalent:
 rosmon2 launch rosmon2 demo.launch.py
 ```
 
+## Publishing a PyPI release
+
+The `publish-pypi.yml` GitHub Actions workflow builds and validates a wheel and
+source distribution for version tags, then publishes them with PyPI Trusted
+Publishing.
+
+Before the first release, register a pending PyPI Trusted Publisher with:
+
+- PyPI project name: `rosmon2`
+- GitHub owner: `GibsonHu`
+- GitHub repository: `rosmon2`
+- Workflow: `publish-pypi.yml`
+- Environment: `pypi`
+
+The Python distribution reads its version from `package.xml`; keep
+`rosmon2/__init__.py` synchronized with it. The test suite and publishing
+workflow check this automatically. Commit the version change, then push a
+matching tag:
+
+```bash
+git tag -a v0.1.0 -m "rosmon2 0.1.0"
+git push origin v0.1.0
+```
+
+PyPI release files are immutable. Increment the version before publishing a
+replacement release.
+
 ## Terminal controls
 
 While a launch is running, the status bar shows each process and its state.
@@ -72,6 +140,8 @@ Global controls are available without selecting a process:
 
 | Key | Action |
 | --- | --- |
+| `F3` | Open or close Diagnosis |
+| `F4` | Open or close the embedded Agent |
 | `F5` | Toggle namespace mode |
 | `F6` | Start all processes |
 | `F7` | Stop all processes |
@@ -85,7 +155,102 @@ Node search matches substrings against full names, including namespaces. Type
 `/` to start searching, use `Tab` or the arrow keys to select a match, and
 press `Enter` to open its node actions. Press `Escape` to cancel the search.
 
-Namespace mode groups processes by their top-level ROS namespace, including
+<details>
+<summary><strong>Diagnosis</strong></summary>
+
+![rosmon2 Diagnosis view](docs/diagnosis.png)
+
+- Press `F3` to open or close Diagnosis.
+- The first health check runs immediately; later Agent checks run only when a
+  node's lifecycle or health state changes.
+- The normal node GUI stays visible, while the table lists only unhealthy,
+  stopped, stalled, crashed, or high-error nodes.
+- Each row shows the node key, name, state, recent error count, and a short
+  `What might be wrong` hint.
+- Ask about a selected node or refer to it by its displayed letter; Rosmon
+  automatically supplies its state and recent logs.
+- Answers stream as dot points under `What might be wrong`, `Hardware`, and
+  `Software`.
+- Repairable software diagnoses end with a `[y/n]` choice; hardware, mixed, and
+  uncertain diagnoses do not offer an automatic repair.
+- Use Up/Down to select a table row.
+- Press `Tab` to switch Up/Down between the table and Agent text; use Page
+  Up/Page Down to scroll a full page.
+- With an empty prompt, press `R` to restart the selected node, `K` to stop it,
+  `N` to restart its namespace, or `X` to stop its namespace.
+- Automatic checks are read-only; node actions and repairs require a direct
+  Human request.
+- Diagnosis has its own conversation history, separate from the F4 Agent.
+
+</details>
+
+<details>
+<summary><strong>Embedded Agent</strong></summary>
+
+![rosmon2 embedded Agent](docs/agent.png)
+
+- Install and authenticate the
+  [Codex CLI](https://learn.chatgpt.com/docs/non-interactive-mode); Rosmon reuses
+  its login and never stores an API key.
+- Press `F4` for open-ended ROS, launch, workspace, code, testing, and node
+  control requests.
+- Rosmon automatically supplies the live node state, selected-node context,
+  and relevant logs; node letters can be used as references.
+- Responses stream while the launch continues, with a spinner and live
+  `Reading`, `Searching`, `Editing`, `Running`, or `Executing` activity.
+- While reasoning, the current user-visible analysis or operation is shown on
+  the spinner row and clipped to the terminal width; hidden chain-of-thought
+  is not displayed.
+- Completed analysis and operation steps remain in the scrollable conversation
+  with a `✓` marker. The spinner moves below them for the current or next step.
+- Press `F2` or enter `/model` to choose the shared Agent and Diagnosis model,
+  choose the Agent access mode, then keep the current Codex account, log in
+  with device authentication, or log out. Login instructions stream in the
+  active panel. GPT-5.5 and `Full access` are selected initially, and every
+  model uses medium reasoning effort.
+- `Approve for me` routes applicable approval requests to Codex auto-review;
+  `Full access` uses no approval prompts. Agent shell execution remains
+  unsandboxed on this host to avoid its unsupported Bubblewrap user namespace.
+- Diagnosis remains filesystem read-only in either Agent access mode.
+- The confirmed F2 model and access selections persist across launches in
+  `~/.config/rosmon2/agent-settings.json`.
+- The input row shows the selected model and remaining Codex usage percentage;
+  `--%` means usage is unavailable.
+- Agent and Diagnosis output is append-only and remains scrollable with
+  Up/Down or Page Up/Page Down. Opening a panel does not preallocate blank
+  transcript rows, and an active response does not pull a scrolled view back
+  to the newest line.
+- Press `F3` from Agent to switch directly to Diagnosis, or `F4` from Diagnosis
+  to switch directly to Agent.
+- Global controls `F5`–`F10` remain available while either panel is open.
+- Direct requests can start, stop, restart, mute, unmute, or debug nodes through
+  Rosmon's validated controls.
+- The Agent can inspect ROS nodes, topics, services, actions, interfaces, and
+  parameters; direct requests can also call services or send action goals.
+- Direct requests can create and start validated Python ROS nodes inside the
+  dedicated `~/rosmon2` folder; Rosmon creates the folder when needed, and
+  managed Agent-created nodes appear orange while running. Their waiting,
+  stopped, and crashed states use the normal node colors.
+- Source edits happen only when directly requested; Agent mode runs without
+  Codex's Bubblewrap sandbox so shell commands, ROS networking, workspace
+  writes, and `/tmp` work on hosts that disable user namespaces.
+- Automatic Diagnosis checks remain read-only.
+- Robot motion requires a discoverable live interface and explicit target,
+  direction, distance, and safety-critical values.
+- Omitted speed and acceleration use discovered controller defaults; safety
+  limits, interlocks, raw effort, torque, and velocity cannot be bypassed.
+- Source ROS and the workspace before starting `mon2` so ROS tools and interface
+  packages are available.
+- Use `--codex-workspace PATH` to select a different source workspace.
+- Use `--codex-command PATH` when the Codex executable has another name or is
+  not on `PATH`.
+
+</details>
+
+<details>
+<summary><strong>Namespace View</strong></summary>
+
+Namespace view groups processes by their top-level ROS namespace, including
 nodes in child namespaces. Each namespace displays `[alive:dead]` process
 counts. Its background is green when all processes are alive, yellow when only
 some are alive, and red when all are dead.
@@ -100,6 +265,8 @@ Select a namespace with its displayed key, then press:
 | `u` | Unmute output from the namespace |
 | `i` | Inspect and control the individual processes |
 | `Backspace` | Return from inspection to the namespace list |
+
+</details>
 
 <details>
 <summary><strong>Advanced usage</strong></summary>

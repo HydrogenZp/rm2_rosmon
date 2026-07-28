@@ -58,6 +58,12 @@ def make_parser() -> argparse.ArgumentParser:
     launch_parser.add_argument(
         '--no-control', action='store_true',
         help='do not create a local control socket')
+    launch_parser.add_argument(
+        '--codex-command', default='codex', metavar='PATH',
+        help='Codex CLI used by F3 diagnosis and the F4 agent (default: codex)')
+    launch_parser.add_argument(
+        '--codex-workspace', metavar='DIR',
+        help='workspace Codex may inspect or edit (default: current directory)')
     launch_parser.add_argument('--no-start', action='store_true',
                                help="discover processes but don't leave them running")
     launch_parser.add_argument('--stop-timeout', type=float, default=5.0, metavar='SECONDS')
@@ -206,6 +212,8 @@ def main(argv=None) -> int:
         session=args.session,
         json_events=args.json_events,
         control=not args.no_control,
+        codex_command=args.codex_command,
+        codex_workspace=args.codex_workspace,
     )
     try:
         return asyncio.run(_run_supervisor(supervisor))

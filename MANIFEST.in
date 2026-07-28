@@ -1,0 +1,6 @@
+include CHANGELOG.rst
+include LICENSE
+include README.md
+include package.xml
+include resource/rosmon2
+include launch/*.*
