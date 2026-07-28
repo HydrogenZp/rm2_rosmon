@@ -145,6 +145,16 @@ class TerminalUI:
     DEFAULT_CODEX_MODEL = 'gpt-5.5'
     DEFAULT_CODEX_MODEL_LABEL = 'GPT-5.5'
     DEFAULT_CODEX_ACCESS_MODE = 'full-access'
+    DEFAULT_CODEX_REASONING_EFFORT = 'medium'
+    CODEX_REASONING_EFFORTS = (
+        ('none', 'None'),
+        ('minimal', 'Minimal'),
+        ('low', 'Low'),
+        ('medium', 'Medium'),
+        ('high', 'High'),
+        ('xhigh', 'Extra high'),
+        ('max', 'Maximum'),
+    )
     DIAGNOSIS_CHAT_VISIBLE_LINES = 12
     DIAGNOSIS_VISIBLE_ROWS = 10
     DIAGNOSIS_SUMMARY_LINES = 4
@@ -194,6 +204,8 @@ class TerminalUI:
         self.codex_model_picker_active = False
         self.codex_model_picker_selected = 0
         self.codex_model_picker_stage = 'root'
+        self.codex_model_picker_pending_model: Optional[str] = None
+        self.codex_reasoning_efforts = {}
         self.codex_access_mode = self.DEFAULT_CODEX_ACCESS_MODE
         self.codex_logged_in: Optional[bool] = None
         self.agent_settings_path = (
@@ -244,7 +256,7 @@ class TerminalUI:
         self._load_agent_settings()
 
     def _load_agent_settings(self) -> None:
-        """Restore the last confirmed F2 model and access selections."""
+        """Restore confirmed F2 model, thinking, and access selections."""
         if self.agent_settings_path is None:
             return
         try:
@@ -264,6 +276,20 @@ class TerminalUI:
         }
         if access_mode in valid_access_modes:
             self.codex_access_mode = access_mode
+        valid_efforts = {
+            effort for effort, _label in self.CODEX_REASONING_EFFORTS
+        }
+        reasoning_efforts = data.get('reasoning_efforts')
+        if isinstance(reasoning_efforts, dict):
+            self.codex_reasoning_efforts = {
+                key: effort
+                for key, effort in reasoning_efforts.items()
+                if (
+                    isinstance(key, str)
+                    and 0 < len(key) <= 256
+                    and effort in valid_efforts
+                )
+            }
 
     def _save_agent_settings(self) -> None:
         """Persist confirmed F2 selections for later mon2 launches."""
@@ -276,9 +302,10 @@ class TerminalUI:
                 self.agent_settings_path.name + '.tmp')
             temporary.write_text(
                 json.dumps({
-                    'version': 1,
+                    'version': 2,
                     'model': self.codex_selected_model,
                     'access_mode': self.codex_access_mode,
+                    'reasoning_efforts': self.codex_reasoning_efforts,
                 }, indent=2) + '\n',
                 encoding='utf-8',
             )
@@ -295,6 +322,7 @@ class TerminalUI:
         self.codex_prompt = ''
         self.codex_model_picker_active = False
         self.codex_model_picker_stage = 'root'
+        self.codex_model_picker_pending_model = None
         if not self.codex_running:
             self.codex_status = 'Ready — ask about the selected node'
         self.redraw()
@@ -305,6 +333,7 @@ class TerminalUI:
         self.codex_prompt = ''
         self.codex_model_picker_active = False
         self.codex_model_picker_stage = 'root'
+        self.codex_model_picker_pending_model = None
         self.redraw()
 
     def open_diagnosis(self) -> None:
@@ -314,6 +343,7 @@ class TerminalUI:
         self.diagnosis_chat_focused = False
         self.codex_model_picker_active = False
         self.codex_model_picker_stage = 'root'
+        self.codex_model_picker_pending_model = None
         self.diagnosis_selected = min(
             self.diagnosis_selected, max(0, len(self.diagnosis_rows) - 1))
         self.redraw()
@@ -324,6 +354,7 @@ class TerminalUI:
         self.diagnosis_chat_focused = False
         self.codex_model_picker_active = False
         self.codex_model_picker_stage = 'root'
+        self.codex_model_picker_pending_model = None
         self.redraw()
 
     def set_diagnosis_rows(self, rows) -> None:
@@ -348,7 +379,7 @@ class TerminalUI:
                 running
                 and not self.diagnosis_chat_running
                 and self.diagnosis_execution_label is None):
-            self.diagnosis_execution_label = 'Analyzing request'
+            self.diagnosis_execution_label = 'Thinking'
         self.diagnosis_chat_running = running
         if running:
             self._start_codex_spinner()
@@ -371,7 +402,7 @@ class TerminalUI:
                 running
                 and not self.codex_running
                 and self.codex_execution_label is None):
-            self.codex_execution_label = 'Analyzing request'
+            self.codex_execution_label = 'Thinking'
         self.codex_running = running
         self.codex_status = status
         if running:
@@ -393,6 +424,10 @@ class TerminalUI:
             messages = self.codex_messages
             self.codex_execution_label = None
         if label is not None:
+            if label == 'Thinking':
+                label = 'Prepared response'
+            elif label.startswith('Thinking:'):
+                label = label.removeprefix('Thinking:').strip()
             messages.append(('Activity', f'✓ {label}'))
 
     def set_agent_execution(
@@ -410,8 +445,11 @@ class TerminalUI:
         updating_reasoning_summary = (
             previous is not None
             and label is not None
-            and previous.startswith('Analyzing:')
-            and label.startswith('Analyzing:')
+            and (
+                previous == 'Thinking'
+                or previous.startswith('Thinking:')
+            )
+            and label.startswith('Thinking:')
         )
         if (
                 previous is not None
@@ -438,6 +476,9 @@ class TerminalUI:
         """Store the visible models advertised by the installed Codex CLI."""
         cleaned = []
         seen = set()
+        valid_efforts = {
+            effort for effort, _label in self.CODEX_REASONING_EFFORTS
+        }
         for item in models:
             if not isinstance(item, dict):
                 continue
@@ -446,6 +487,21 @@ class TerminalUI:
                 continue
             seen.add(model)
             display_name = item.get('display_name')
+            supported_efforts = []
+            for effort_item in item.get('supported_reasoning_efforts', ()):
+                effort = (
+                    (
+                        effort_item.get('reasoning_effort')
+                        or effort_item.get('reasoningEffort')
+                    )
+                    if isinstance(effort_item, dict) else
+                    effort_item
+                )
+                if effort in valid_efforts and effort not in supported_efforts:
+                    supported_efforts.append(effort)
+            default_effort = item.get('default_reasoning_effort')
+            if default_effort not in valid_efforts:
+                default_effort = self.DEFAULT_CODEX_REASONING_EFFORT
             cleaned.append({
                 'model': model,
                 'display_name': (
@@ -454,6 +510,8 @@ class TerminalUI:
                     else model
                 ),
                 'is_default': bool(item.get('is_default')),
+                'supported_reasoning_efforts': tuple(supported_efforts),
+                'default_reasoning_effort': default_effort,
             })
         self.codex_models = cleaned
         self.codex_models_loading = loading
@@ -475,10 +533,23 @@ class TerminalUI:
         self.redraw()
 
     def _codex_model_choices(self):
+        default_model = next(
+            (item for item in self.codex_models if item['is_default']),
+            None,
+        )
         choices = [{
             'model': None,
             'display_name': 'Codex default',
             'is_default': True,
+            'supported_reasoning_efforts': (
+                default_model['supported_reasoning_efforts']
+                if default_model is not None else ()
+            ),
+            'default_reasoning_effort': (
+                default_model['default_reasoning_effort']
+                if default_model is not None else
+                self.DEFAULT_CODEX_REASONING_EFFORT
+            ),
         }] + self.codex_models
         available = {item['model'] for item in choices}
         if (
@@ -488,6 +559,9 @@ class TerminalUI:
                 'model': self.codex_selected_model,
                 'display_name': self.codex_model_label(),
                 'is_default': False,
+                'supported_reasoning_efforts': (),
+                'default_reasoning_effort': (
+                    self.DEFAULT_CODEX_REASONING_EFFORT),
             })
         return choices
 
@@ -500,13 +574,86 @@ class TerminalUI:
     def codex_model_label(self) -> str:
         """Return a short label for the model used by new Agent turns."""
         if self.codex_selected_model is None:
-            return 'Default'
+            for item in self.codex_models:
+                if item['is_default']:
+                    return item['display_name']
+            return self.DEFAULT_CODEX_MODEL_LABEL
         if self.codex_selected_model == self.DEFAULT_CODEX_MODEL:
             return self.DEFAULT_CODEX_MODEL_LABEL
         for item in self.codex_models:
             if item['model'] == self.codex_selected_model:
                 return item['display_name']
         return self.codex_selected_model
+
+    @staticmethod
+    def _codex_reasoning_key(model: Optional[str]) -> str:
+        return model if model is not None else '__default__'
+
+    def _codex_model_choice(self, model: Optional[str]):
+        return next(
+            (
+                choice for choice in self._codex_model_choices()
+                if choice['model'] == model
+            ),
+            None,
+        )
+
+    def codex_reasoning_effort_for_model(
+            self, model: Optional[str]) -> str:
+        """Return the persisted, supported thinking level for one model."""
+        choice = self._codex_model_choice(model)
+        supported = (
+            choice['supported_reasoning_efforts']
+            if choice is not None else ()
+        )
+        configured = self.codex_reasoning_efforts.get(
+            self._codex_reasoning_key(model))
+        if configured is not None and (
+                not supported or configured in supported):
+            return configured
+        if self.DEFAULT_CODEX_REASONING_EFFORT in supported or not supported:
+            return self.DEFAULT_CODEX_REASONING_EFFORT
+        default = (
+            choice['default_reasoning_effort']
+            if choice is not None else None
+        )
+        return default if default in supported else supported[0]
+
+    def codex_reasoning_effort(self) -> str:
+        """Return the thinking level used by new Agent and Diagnosis turns."""
+        return self.codex_reasoning_effort_for_model(
+            self.codex_selected_model)
+
+    def codex_reasoning_label(self, model: Optional[str]) -> str:
+        effort = self.codex_reasoning_effort_for_model(model)
+        return next(
+            (
+                label for value, label in self.CODEX_REASONING_EFFORTS
+                if value == effort
+            ),
+            effort,
+        )
+
+    def _codex_reasoning_choices(self, model: Optional[str]):
+        choice = self._codex_model_choice(model)
+        supported = (
+            choice['supported_reasoning_efforts']
+            if choice is not None else ()
+        )
+        allowed = (
+            supported
+            if supported else
+            ('low', 'medium', 'high', 'xhigh')
+        )
+        labels = dict(self.CODEX_REASONING_EFFORTS)
+        return [
+            {
+                'kind': 'reasoning',
+                'effort': effort,
+                'display_name': labels.get(effort, effort),
+            }
+            for effort in allowed
+        ]
 
     @staticmethod
     def _codex_access_choices():
@@ -568,12 +715,16 @@ class TerminalUI:
                 {'kind': 'access', **choice}
                 for choice in self._codex_access_choices()
             ]
+        if self.codex_model_picker_stage == 'reasoning':
+            return self._codex_reasoning_choices(
+                self.codex_model_picker_pending_model)
         return self._codex_picker_root_choices()
 
     def open_codex_model_picker(self) -> None:
         self.codex_model_picker_active = True
         self.codex_model_picker_stage = 'root'
         self.codex_model_picker_selected = 0
+        self.codex_model_picker_pending_model = None
         self.redraw()
 
     def open_codex_login_option(self) -> None:
@@ -593,14 +744,21 @@ class TerminalUI:
     def close_codex_model_picker(self) -> None:
         self.codex_model_picker_active = False
         self.codex_model_picker_stage = 'root'
+        self.codex_model_picker_pending_model = None
         self.redraw()
 
     def back_codex_model_picker(self) -> bool:
         """Return to settings categories, or report that the picker should close."""
         if self.codex_model_picker_stage == 'root':
             return False
-        self.codex_model_picker_stage = 'root'
-        self.codex_model_picker_selected = 0
+        if self.codex_model_picker_stage == 'reasoning':
+            self.codex_model_picker_stage = 'model'
+            self.codex_model_picker_selected = self._codex_model_choice_index(
+                self.codex_model_picker_pending_model)
+        else:
+            self.codex_model_picker_stage = 'root'
+            self.codex_model_picker_selected = 0
+            self.codex_model_picker_pending_model = None
         self.redraw()
         return True
 
@@ -640,10 +798,28 @@ class TerminalUI:
                 0,
             )
         elif choice['kind'] == 'model':
-            self.codex_selected_model = choice['model']
+            self.codex_model_picker_pending_model = choice['model']
+            self.codex_model_picker_stage = 'reasoning'
+            current_effort = self.codex_reasoning_effort_for_model(
+                choice['model'])
+            self.codex_model_picker_selected = next(
+                (
+                    index
+                    for index, reasoning in enumerate(
+                        self._codex_reasoning_choices(choice['model']))
+                    if reasoning['effort'] == current_effort
+                ),
+                0,
+            )
+        elif choice['kind'] == 'reasoning':
+            model = self.codex_model_picker_pending_model
+            self.codex_selected_model = model
+            self.codex_reasoning_efforts[
+                self._codex_reasoning_key(model)] = choice['effort']
             self._save_agent_settings()
             self.codex_model_picker_stage = 'root'
             self.codex_model_picker_selected = 0
+            self.codex_model_picker_pending_model = None
         elif choice['kind'] == 'access':
             self.codex_access_mode = choice['mode']
             self._save_agent_settings()
@@ -653,6 +829,7 @@ class TerminalUI:
             action = choice['action']
             self.codex_model_picker_active = False
             self.codex_model_picker_stage = 'root'
+            self.codex_model_picker_pending_model = None
         self.redraw()
         return action
 
@@ -1293,6 +1470,8 @@ class TerminalUI:
                     item['model'],
                     item['display_name'],
                     item['is_default'],
+                    item['supported_reasoning_efforts'],
+                    item['default_reasoning_effort'],
                 )
                 for item in self.codex_models
             ),
@@ -1301,6 +1480,8 @@ class TerminalUI:
             self.codex_model_picker_active,
             self.codex_model_picker_selected,
             self.codex_model_picker_stage,
+            self.codex_model_picker_pending_model,
+            tuple(sorted(self.codex_reasoning_efforts.items())),
             self.codex_access_mode,
             self.codex_logged_in,
             self._codex_spinner_index,
@@ -1579,6 +1760,15 @@ class TerminalUI:
         visible = choices[start:start + visible_count]
         if self.codex_model_picker_stage == 'model':
             title = ' Models'
+        elif self.codex_model_picker_stage == 'reasoning':
+            model_choice = self._codex_model_choice(
+                self.codex_model_picker_pending_model)
+            model_name = (
+                model_choice['display_name']
+                if model_choice is not None else
+                self.codex_model_label()
+            )
+            title = f' Thinking level — {model_name}'
         elif self.codex_model_picker_stage == 'access':
             title = ' Permissions'
         else:
@@ -1614,10 +1804,21 @@ class TerminalUI:
                     f' {marker} {choice["display_name"]} — '
                     f'{choice["description"]}'
                 )
+            elif choice['kind'] == 'reasoning':
+                if choice['effort'] == self.codex_reasoning_effort_for_model(
+                        self.codex_model_picker_pending_model):
+                    suffix = ' (current)'
+                text = (
+                    f' {marker} {choice["display_name"]}{suffix}'
+                )
             else:
                 if choice['model'] is not None and choice['is_default']:
                     suffix = ' (CLI default)'
-                text = f' {marker} {choice["display_name"]}{suffix}'
+                thinking = self.codex_reasoning_label(choice['model'])
+                text = (
+                    f' {marker} {choice["display_name"]}{suffix}'
+                    f' — {thinking} thinking'
+                )
             style = self.NODE_SELECTED if index == selected else self.BAR
             lines.append(self._fit(style + text + self.RESET, columns))
         controls = (

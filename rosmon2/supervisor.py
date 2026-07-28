@@ -145,7 +145,6 @@ ROS_MANAGED_NODE_NAME_RE = re.compile(
 ROS_PARAMETER_RE = re.compile(
     r'^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$'
 )
-CODEX_DEFAULT_REASONING_EFFORT = 'medium'
 CODEX_APP_SERVER_STREAM_LIMIT = 16 * 1024 * 1024
 ROS_INTERFACE_RE = re.compile(
     r'^[A-Za-z][A-Za-z0-9_]*/(?:msg|srv|action)/'
@@ -996,7 +995,7 @@ class Supervisor:
             '--ask-for-approval', 'never',
             'exec',
             '--config',
-            f'model_reasoning_effort="{CODEX_DEFAULT_REASONING_EFFORT}"',
+            f'model_reasoning_effort="{self.ui.codex_reasoning_effort()}"',
             *(
                 ['--model', self.ui.codex_selected_model]
                 if self.ui.codex_selected_model is not None else
@@ -1382,6 +1381,17 @@ class Supervisor:
                             or item.get('id')
                         ),
                         'is_default': bool(item.get('isDefault')),
+                        'supported_reasoning_efforts': [
+                            (
+                                effort.get('reasoningEffort')
+                                if isinstance(effort, dict) else
+                                effort
+                            )
+                            for effort in item.get(
+                                'supportedReasoningEfforts', [])
+                        ],
+                        'default_reasoning_effort': item.get(
+                            'defaultReasoningEffort'),
                     })
                 self.ui.set_codex_models(models)
             except (OSError, asyncio.TimeoutError):
@@ -1939,7 +1949,7 @@ class Supervisor:
         if item_type == 'imageGeneration':
             return 'Generating image'
         if item_type == 'reasoning':
-            return 'Analyzing request'
+            return 'Thinking'
         if item_type == 'plan':
             return 'Planning next steps'
         return None
@@ -1954,7 +1964,7 @@ class Supervisor:
         clean = re.sub(r'[*_`]+', '', clean).strip()
         if not clean:
             return None
-        return f'Analyzing: {clean.rstrip(".…")}'
+        return f'Thinking: {clean.rstrip(".…")}'
 
     @classmethod
     def _command_activity_label(cls, item: Dict) -> str:
@@ -2750,7 +2760,7 @@ class Supervisor:
                 'method': 'turn/start',
                 'params': {
                     'threadId': thread_id,
-                    'effort': CODEX_DEFAULT_REASONING_EFFORT,
+                    'effort': self.ui.codex_reasoning_effort(),
                         'summary': 'detailed',
                         'sandboxPolicy': sandbox_policy,
                         'input': [{

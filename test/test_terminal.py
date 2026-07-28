@@ -614,7 +614,20 @@ def test_codex_model_picker_selects_installed_model_and_updates_prompt():
     )
     assert ui.apply_codex_model_selection() is None
 
+    assert ui.codex_model_picker_stage == 'reasoning'
+    thinking = ANSI_RE.sub('', '\n'.join(ui._codex_panel_lines(100)))
+    assert 'Thinking level — GPT-5.3-Codex' in thinking
+    assert 'Low' in thinking
+    assert '> Medium (current)' in thinking
+    assert 'High' in thinking
+    ui.codex_model_picker_selected = next(
+        index for index, choice in enumerate(ui._codex_picker_choices())
+        if choice['effort'] == 'high'
+    )
+    assert ui.apply_codex_model_selection() is None
+
     assert ui.codex_selected_model == 'gpt-5.3-codex'
+    assert ui.codex_reasoning_effort() == 'high'
     assert ui.codex_model_picker_active
     assert ui.codex_model_picker_stage == 'root'
 
@@ -686,6 +699,12 @@ def test_codex_model_and_access_selection_persist_across_launches(tmp_path):
         and choice['model'] == 'gpt-5.3-codex'
     )
     ui.apply_codex_model_selection()
+    ui.codex_model_picker_selected = next(
+        index for index, choice in enumerate(ui._codex_picker_choices())
+        if choice['kind'] == 'reasoning'
+        and choice['effort'] == 'high'
+    )
+    ui.apply_codex_model_selection()
     ui.codex_model_picker_selected = 1
     ui.apply_codex_model_selection()
     ui.codex_model_picker_selected = next(
@@ -703,6 +722,7 @@ def test_codex_model_and_access_selection_persist_across_launches(tmp_path):
     )
     assert restored.codex_selected_model == 'gpt-5.3-codex'
     assert restored.codex_access_mode == 'approve-for-me'
+    assert restored.codex_reasoning_effort() == 'high'
 
 
 def test_invalid_codex_settings_use_safe_defaults(tmp_path):
@@ -732,6 +752,22 @@ def test_codex_model_picker_loading_state_keeps_default_available():
 
     assert 'loading available models' in picker
     assert 'Codex default' in picker
+
+
+def test_codex_default_summary_uses_the_actual_model_name():
+    ui = TerminalUI(False, lambda _key: None)
+    ui.set_codex_models([{
+        'model': 'gpt-5.4',
+        'display_name': 'GPT-5.4',
+        'is_default': True,
+    }])
+    ui.codex_selected_model = None
+    ui.open_codex_model_picker()
+
+    picker = ANSI_RE.sub('', '\n'.join(ui._codex_panel_lines(80)))
+
+    assert '> Models › — GPT-5.4' in picker
+    assert 'Models › — Default' not in picker
 
 
 def test_rosmon_responses_highlight_hardware_names_in_distinct_colors():
@@ -942,10 +978,10 @@ def test_codex_spinner_advances_while_request_is_running():
     assert ui.CODEX_SPINNER_FRAMES[ui._codex_spinner_index] == '⠋'
     ui.add_codex_message('You', 'what is wrong with b?')
     running_panel = ANSI_RE.sub('', '\n'.join(ui._codex_panel_lines(100)))
-    assert 'Rosmon: ⠋ Analyzing request…' in running_panel
+    assert 'Rosmon: ⠋ Thinking…' in running_panel
     assert (
         running_panel.index('Human: what is wrong with b?')
-        < running_panel.index('Rosmon: ⠋ Analyzing request…')
+        < running_panel.index('Rosmon: ⠋ Thinking…')
     )
     first.callback()
     assert ui.CODEX_SPINNER_FRAMES[ui._codex_spinner_index] == '⠙'
@@ -1016,7 +1052,7 @@ def test_codex_activity_uses_one_fixed_height_loading_line():
     ui.set_codex_running(True, 'Inspecting…')
     ui.set_agent_execution(
         'agent',
-        'Analyzing: Inspecting the live ROS graph and checking the '
+        'Thinking: Inspecting the live ROS graph and checking the '
         'target-pose controller configuration before selecting an interface',
     )
 
@@ -1025,7 +1061,7 @@ def test_codex_activity_uses_one_fixed_height_loading_line():
     plain = ANSI_RE.sub('', activity[0])
 
     assert len(activity) == 1
-    assert 'Rosmon: ⠋ Analyzing: Inspecting' in plain
+    assert 'Rosmon: ⠋ Thinking: Inspecting' in plain
     assert '↳' not in plain
     assert len(plain) <= 50
 
@@ -1038,14 +1074,14 @@ def test_codex_response_stream_replaces_spinner_and_is_retained():
     ui.begin_codex_stream()
 
     waiting = ANSI_RE.sub('', '\n'.join(ui._codex_panel_lines(100)))
-    assert 'Rosmon: ✓ Analyzing request' in waiting
+    assert 'Rosmon: ✓ Prepared response' in waiting
     assert 'Rosmon: ⠋ Preparing next step…' in waiting
 
     ui.append_codex_stream('## What might be wrong\n- The ')
     first_chunk = ANSI_RE.sub('', '\n'.join(ui._codex_panel_lines(100)))
     assert 'Rosmon: ## What might be wrong' in first_chunk
     assert 'Rosmon: - The' in first_chunk
-    assert 'Analyzing request…' not in first_chunk
+    assert 'Thinking…' not in first_chunk
 
     ui.append_codex_stream('driver stopped.')
     second_chunk = ANSI_RE.sub('', '\n'.join(ui._codex_panel_lines(100)))
@@ -1056,7 +1092,7 @@ def test_codex_response_stream_replaces_spinner_and_is_retained():
     ui.set_codex_running(False, 'Ready')
     finished = ANSI_RE.sub('', '\n'.join(ui._codex_panel_lines(100)))
     assert finished.count('Rosmon: ## What might be wrong') == 1
-    assert 'Rosmon: ✓ Analyzing request' in finished
+    assert 'Rosmon: ✓ Prepared response' in finished
     assert ui.codex_stream_text == ''
 
 
@@ -1065,24 +1101,25 @@ def test_reasoning_summary_updates_one_live_step_then_remains_completed():
     ui.codex_active = True
     ui.set_codex_running(True, 'Inspecting…')
 
-    ui.set_agent_execution('agent', 'Analyzing: Inspecting ROS')
+    ui.set_agent_execution('agent', 'Thinking: Inspecting ROS')
     ui.set_agent_execution(
-        'agent', 'Analyzing: Inspecting ROS and controller configuration')
+        'agent', 'Thinking: Inspecting ROS and controller configuration')
 
     assert not any(
-        message == '✓ Analyzing: Inspecting ROS'
+        message == '✓ Inspecting ROS'
         for _speaker, message in ui.codex_messages
     )
     ui.set_agent_execution('agent', None)
     ui.set_agent_execution('agent', 'Running controller tests')
 
     panel = ANSI_RE.sub('', '\n'.join(ui._codex_panel_lines(100)))
-    assert 'Rosmon: ✓ Analyzing request' in panel
+    assert 'Rosmon: ✓ Prepared response' not in panel
     assert (
-        'Rosmon: ✓ Analyzing: Inspecting ROS and controller configuration'
+        'Rosmon: ✓ Inspecting ROS and controller configuration'
         in panel
     )
-    assert panel.index('✓ Analyzing:') < panel.index('Running controller tests')
+    assert panel.index('✓ Inspecting ROS') < panel.index(
+        'Running controller tests')
 
 
 def test_repeated_agent_activities_are_retained_within_current_turn():
@@ -1090,8 +1127,8 @@ def test_repeated_agent_activities_are_retained_within_current_turn():
     ui.codex_active = True
     ui.add_codex_message('You', 'move the robot tcp 10 mm +X')
     for label in (
-            'Analyzing request',
-            'Analyzing request',
+            'Thinking',
+            'Thinking',
             'Executing ROS operation',
             'Executing ROS operation',
             'Using rosmon2/rosmon2_start',
@@ -1100,7 +1137,7 @@ def test_repeated_agent_activities_are_retained_within_current_turn():
         ui.set_agent_execution('agent', None)
 
     assert list(ui.codex_messages).count(
-        ('Activity', '✓ Analyzing request')) == 2
+        ('Activity', '✓ Prepared response')) == 2
     assert list(ui.codex_messages).count(
         ('Activity', '✓ Executing ROS operation')) == 2
     assert list(ui.codex_messages).count(

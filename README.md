@@ -198,11 +198,11 @@ press `Enter` to open its node actions. Press `Escape` to cancel the search.
   and relevant logs; node letters can be used as references.
 - Responses stream while the launch continues, with a spinner and live
   `Reading`, `Searching`, `Editing`, `Running`, or `Executing` activity.
-- While reasoning, the current user-visible analysis or operation is shown on
-  the spinner row and clipped to the terminal width; hidden chain-of-thought
-  is not displayed.
-- Completed analysis and operation steps remain in the scrollable conversation
-  with a `✓` marker. The spinner moves below them for the current or next step.
+- While reasoning, the spinner initially shows `Thinking`, then adds the
+  current user-visible summary; hidden chain-of-thought is not displayed.
+- When thinking completes, `Thinking` is replaced by the summary of what was
+  done and retained with a `✓` marker. The spinner moves below it for the
+  current or next step.
 - Press `F2` or enter `/model` to choose the shared Agent and Diagnosis model,
   permissions, and account action. `Models` and `Permissions` open nested
   option lists. The account row shows `Log in` while logged out and `Log out`
@@ -210,13 +210,14 @@ press `Enter` to open its node actions. Press `Escape` to cancel the search.
   logged out, Agent and Diagnosis requests pause and ask you to log in first.
   Opening Agent with `F4` while logged out highlights `Log in`, so pressing
   `Enter` starts browser authentication immediately. GPT-5.5 and `Full access`
-  are selected initially, and every model uses medium reasoning effort.
+  are selected initially. Selecting a model opens its `Thinking level` list;
+  each model defaults to Medium and remembers its own selected effort.
 - `Approve for me` routes applicable approval requests to Codex auto-review;
   `Full access` uses no approval prompts. Agent shell execution remains
   unsandboxed on this host to avoid its unsupported Bubblewrap user namespace.
 - Diagnosis remains filesystem read-only in either Agent access mode.
-- The confirmed F2 model and access selections persist across launches in
-  `~/.config/rosmon2/agent-settings.json`.
+- The confirmed F2 model, per-model thinking levels, and access selection
+  persist across launches in `~/.config/rosmon2/agent-settings.json`.
 - The input row shows the selected model and remaining Codex usage percentage;
   `--%` means usage is unavailable.
 - Agent and Diagnosis output is append-only and remains scrollable with

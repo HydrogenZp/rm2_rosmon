@@ -319,6 +319,8 @@ def test_agent_f2_picker_and_model_command_choose_a_model():
     assert supervisor.ui.codex_model_picker_stage == 'model'
     supervisor.handle_key('DOWN')
     supervisor.handle_key('\n')
+    assert supervisor.ui.codex_model_picker_stage == 'reasoning'
+    supervisor.handle_key('\n')
     assert supervisor.ui.codex_selected_model == 'gpt-5.4'
     assert supervisor.ui.codex_model_picker_stage == 'root'
 
@@ -505,6 +507,8 @@ def test_diagnosis_f2_picker_changes_shared_model():
     supervisor.handle_key('\n')
     assert supervisor.ui.codex_model_picker_stage == 'model'
     supervisor.handle_key('DOWN')
+    supervisor.handle_key('\n')
+    assert supervisor.ui.codex_model_picker_stage == 'reasoning'
     supervisor.handle_key('\n')
 
     assert supervisor.ui.codex_selected_model == 'gpt-5.4'
@@ -863,6 +867,7 @@ def test_diagnosis_agent_receives_initial_snapshot(monkeypatch, tmp_path):
         key=0, display_name='ur10e/driver',
         state=State.RUNNING, pid=100,
     ))
+    supervisor.ui.codex_reasoning_efforts['gpt-5.5'] = 'high'
     monkeypatch.setattr(supervisor, '_request_codex_usage', lambda: None)
 
     async def open_and_wait():
@@ -876,7 +881,7 @@ def test_diagnosis_agent_receives_initial_snapshot(monkeypatch, tmp_path):
     assert commands[0][0][commands[0][0].index('--model') + 1] == 'gpt-5.5'
     assert '--config' in commands[0][0]
     assert commands[0][0][commands[0][0].index('--config') + 1] == (
-        'model_reasoning_effort="medium"')
+        'model_reasoning_effort="high"')
     assert 'initial diagnosis check' in commands[0][0][-1]
     assert '/ur10e/driver: state=running, health=Healthy' in commands[0][0][-1]
     assert supervisor.ui.diagnosis_summary == [
@@ -1114,6 +1119,9 @@ def test_codex_execution_item_labels_are_short_and_user_facing():
         'query': 'ROS 2 controller timeout',
     }) == 'Searching the web for ROS 2 controller timeout'
     assert Supervisor._execution_label_from_item({
+        'type': 'reasoning',
+    }) == 'Thinking'
+    assert Supervisor._execution_label_from_item({
         'type': 'agentMessage',
         'text': 'answer',
     }) is None
@@ -1241,9 +1249,14 @@ def test_codex_usage_is_read_from_app_server(monkeypatch, tmp_path):
                 ),
                 (
                     b'{"id":3,"result":{"data":['
-                    b'{"id":"gpt-5.4","model":"gpt-5.4",'
-                    b'"displayName":"GPT-5.4","hidden":false,'
-                    b'"isDefault":true},'
+                        b'{"id":"gpt-5.4","model":"gpt-5.4",'
+                        b'"displayName":"GPT-5.4","hidden":false,'
+                        b'"isDefault":true,'
+                        b'"supportedReasoningEfforts":['
+                        b'{"reasoningEffort":"low"},'
+                        b'{"reasoningEffort":"medium"},'
+                        b'{"reasoningEffort":"high"}],'
+                        b'"defaultReasoningEffort":"medium"},'
                     b'{"id":"hidden","model":"hidden",'
                     b'"displayName":"Hidden","hidden":true,'
                     b'"isDefault":false}]}}\n'
@@ -1299,6 +1312,8 @@ def test_codex_usage_is_read_from_app_server(monkeypatch, tmp_path):
         'model': 'gpt-5.4',
         'display_name': 'GPT-5.4',
         'is_default': True,
+        'supported_reasoning_efforts': ('low', 'medium', 'high'),
+        'default_reasoning_effort': 'medium',
     }]
     assert not supervisor.ui.codex_models_loading
     assert process.stdin.closed
@@ -1497,7 +1512,7 @@ def test_codex_streams_detailed_reasoning_summary_as_activity(
 
     assert (
         'agent',
-        'Analyzing: Inspecting the live ROS graph and checking the '
+        'Thinking: Inspecting the live ROS graph and checking the '
         'target-pose controller',
     ) in activities
     assert activities[-1] == ('agent', None)
@@ -1599,6 +1614,7 @@ def test_selected_model_applies_to_agent_and_diagnosis_turns(
         'is_default': False,
     }])
     supervisor.ui.codex_selected_model = 'gpt-5.3-codex'
+    supervisor.ui.codex_reasoning_efforts['gpt-5.3-codex'] = 'high'
     supervisor.ui.codex_access_mode = 'approve-for-me'
 
     asyncio.run(supervisor._run_codex('inspect the workspace', mode='agent'))
@@ -1624,8 +1640,8 @@ def test_selected_model_applies_to_agent_and_diagnosis_turns(
         )
         for process in processes
     ]
-    assert agent_turn['params']['effort'] == 'medium'
-    assert diagnosis_turn['params']['effort'] == 'medium'
+    assert agent_turn['params']['effort'] == 'high'
+    assert diagnosis_turn['params']['effort'] == 'high'
 
 
 def test_codex_control_tool_is_only_exposed_for_direct_node_actions():
