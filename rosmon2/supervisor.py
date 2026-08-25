@@ -9,7 +9,7 @@ from typing import Callable, Dict, Optional
 
 from .control import ControlError, ControlServer
 from .launch_runtime import LaunchRuntime
-from .model import ProcessRecord, ProcessState, selection_key, State
+from .model import ProcessRecord, selection_key, State
 from .process_supervisor import ProcessSupervisor
 from .registry import ProcessRegistry
 from .terminal import TerminalUI
