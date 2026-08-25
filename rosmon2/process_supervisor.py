@@ -28,7 +28,6 @@ class ProcessSupervisor:
         self.on_changed = on_changed
         self.shutting_down = False
         self._pending_restarts: set[int] = set()
-        self._restart_generation: dict[int, int] = {}
         self._state_event = asyncio.Event()
 
     def _notify(self, record: ProcessRecord, reason: str) -> None:
@@ -107,6 +106,9 @@ class ProcessSupervisor:
                 record.state = ProcessState.STOPPED
             self._notify(record, f'{reason} stop requested')
             return
+        if record.state is ProcessState.STOPPING:
+            record.expected_stop = True
+            return
         if record.state is ProcessState.RUNNING:
             self._set_state(record, ProcessState.STOPPING)
         record.expected_stop = True
@@ -116,12 +118,11 @@ class ProcessSupervisor:
     def restart(self, record: ProcessRecord) -> None:
         if self.shutting_down:
             return
+        if record.state is ProcessState.STOPPING:
+            return
         if record.pid is None:
             self.start(record)
             return
-        self._restart_generation[record.key] = (
-            self._restart_generation.get(record.key, 0) + 1
-        )
         self._pending_restarts.add(record.key)
         self.stop(record, reason='restart')
 
@@ -140,8 +141,6 @@ class ProcessSupervisor:
             namespace = self.namespace_for_name(display_name)
             record = self.registry.create(display_name, namespace)
             self.registry.bind(event.action, record)
-        elif record.pid is not None and record.action is event.action:
-            record.restart_count += 1
         record.action = event.action
         record.cmd = list(event.cmd)
         record.cwd = event.cwd
