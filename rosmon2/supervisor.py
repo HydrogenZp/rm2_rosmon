@@ -81,11 +81,14 @@ class Supervisor:
         self._shutdown_lock = asyncio.Lock()
         self.runtime.prepare()
         self._context = self.runtime.context
-        if self.ui.enabled or self.json_events:
-            self.runtime.attach_screen_stream(
-                lambda message: self.ui.log('launch', message),
-                self.ui.flush,
-            )
+        # ExecuteProcess output is already delivered through OnProcessIO,
+        # where it gets the real process label.  The launch screen handler
+        # formats the same bytes as ``launch: [name-N] ...``; forwarding that
+        # stream as well produces duplicate lines and a misleading ``launch``
+        # source column in the rosmon UI.  Keep the handler attached only to
+        # drain its output.  Launch lifecycle failures are still reported by
+        # the process and launch callbacks below.
+        self.runtime.attach_screen_stream(lambda _message: None, lambda: None)
         control_started = False
         session_started = False
         try:

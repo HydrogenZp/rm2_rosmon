@@ -179,11 +179,13 @@ class LaunchRuntime:
 
     def attach_screen_stream(
             self, log: Callable[[str], None], flush: Callable[[], None]) -> None:
-        """Route launch screen output through the UI.
+        """Attach a controlled sink for launch's screen output.
 
         ROS 2 does not expose a stable screen-handler setter across all target
         distros.  This small compatibility boundary is the only place where
-        the launch logging implementation is touched.
+        the launch logging implementation is touched.  The supervisor uses a
+        discard sink because process bytes are delivered separately through
+        ``OnProcessIO`` with their real process names.
         """
         self._screen_restore = attach_screen_stream(
             screen_handler(), _UILogStream(log, flush)
