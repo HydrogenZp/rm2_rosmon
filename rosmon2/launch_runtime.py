@@ -54,6 +54,7 @@ class LaunchRuntime:
         self.service: Optional[LaunchService] = None
         self.context = None
         self._shutdown_requested = False
+        self._shutdown_emitted = False
         self._screen_restore: Optional[Callable[[], None]] = None
 
     def prepare(self) -> None:
@@ -105,10 +106,13 @@ class LaunchRuntime:
 
     def request_shutdown(self) -> None:
         self._shutdown_requested = True
-        if self.context is not None:
+        if self.context is not None and not self._shutdown_emitted:
             self._emit_shutdown()
 
     def _emit_shutdown(self) -> None:
+        if self._shutdown_emitted:
+            return
+        self._shutdown_emitted = True
         self.context.emit_event_sync(
             Shutdown(reason='rosmon2 shutdown requested')
         )

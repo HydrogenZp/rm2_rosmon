@@ -200,17 +200,30 @@ class ProcessSupervisor:
             try:
                 os.kill(pid, signal.SIGKILL)
             except ProcessLookupError:
-                record.pid = None
+                self._mark_forced_termination(record, pid, 'process already exited')
             except OSError:
                 continue
-            record.exit_code = -signal.SIGKILL
-            record.expected_stop = True
-            await self._wait_pid_gone(pid, 1.0)
-            if record.pid == pid:
-                record.pid = None
-                record.state = ProcessState.STOPPED
-                self._notify(record, 'forced process termination')
+            else:
+                record.exit_code = -signal.SIGKILL
+                record.expected_stop = True
+                await self._wait_pid_gone(pid, 1.0)
+                if record.pid == pid:
+                    self._mark_forced_termination(
+                        record, pid, 'forced process termination')
         await self.wait_stopped(1.0)
+
+    def _mark_forced_termination(
+            self, record: ProcessRecord, pid: int, reason: str) -> None:
+        """Finalize a child that did not produce a normal launch exit event."""
+        if record.pid != pid:
+            return
+        record.pid = None
+        record.expected_stop = True
+        if record.state is not ProcessState.STOPPED:
+            # A forced kill is terminal for this action.  The action mapping is
+            # removed by the eventual launch exit event, if one arrives.
+            record.state = ProcessState.STOPPED
+        self._notify(record, reason)
 
     @staticmethod
     async def _wait_pid_gone(pid: int, timeout: float) -> None:

@@ -78,6 +78,31 @@ def test_process_supervisor_rejects_restart_after_shutdown():
     assert not runtime.includes
 
 
+def test_shutdown_marks_unreported_child_stopped_after_forced_kill(monkeypatch):
+    registry = ProcessRegistry()
+    runtime = _FakeRuntime()
+    supervisor = ProcessSupervisor(registry, runtime, stop_timeout=0)
+    record = registry.create('probe')
+    record.action = object()
+    record.pid = 321
+    record.state = State.RUNNING
+
+    killed = []
+    monkeypatch.setattr('rosmon2.process_supervisor.os.kill',
+                        lambda pid, sig: killed.append((pid, sig)))
+    monkeypatch.setattr(
+        ProcessSupervisor, '_wait_pid_gone',
+        staticmethod(lambda _pid, _timeout: asyncio.sleep(0)),
+    )
+
+    asyncio.run(supervisor.shutdown())
+
+    assert killed
+    assert record.pid is None
+    assert record.state is State.STOPPED
+    assert record.expected_stop
+
+
 def test_display_names_do_not_include_the_root_slash():
     assert Supervisor._normalize_display_name('/talker') == 'talker'
     assert Supervisor._normalize_display_name('/robot/talker') == 'robot/talker'
