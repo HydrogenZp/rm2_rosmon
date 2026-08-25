@@ -67,6 +67,7 @@ def test_wrapped_output_keeps_colored_source_gutter(monkeypatch, capsys):
     plain = ANSI_RE.sub('', output)
     assert plain.count('controllers/ros2_control_node:') == 1
     assert '\n' in plain
+    assert '~ aaaaaaaaa' in plain
     assert output.count('\x1b[48;2;') >= 2
 
 
@@ -158,6 +159,23 @@ def test_status_bar_shows_complete_process_names(monkeypatch, capsys):
     assert 'hardware_setup' in output
     assert 'ur10e/ur_ros_rtde/robot_state_receiver' in output
     assert 'ardware_setup' not in output.replace('hardware_setup', '')
+
+
+def test_status_bar_keeps_selection_key_and_state_color_separate(
+        monkeypatch, capsys):
+    ui = TerminalUI(False, lambda _key: None)
+    ui.enabled = True
+    ui._started = True
+    ui.records = [ProcessRecord(key=0, display_name='/talker', state=State.RUNNING)]
+    monkeypatch.setattr(
+        'rosmon2.terminal.shutil.get_terminal_size',
+        lambda _fallback: os.terminal_size((80, 24)),
+    )
+
+    ui.redraw()
+
+    output = capsys.readouterr().out
+    assert f'{TerminalUI.KEY}a{TerminalUI.RUNNING} talker ' in output
 
 
 def test_batched_log_output_reprints_status_without_a_flash(

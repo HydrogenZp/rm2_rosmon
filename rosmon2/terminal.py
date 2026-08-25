@@ -387,11 +387,11 @@ class TerminalUI:
         """Paint the fixed source column on wrapped continuation lines."""
         background = self._label_colors.get(source)
         if background is None:
-            return ' ' * (width + 1)
+            return f'{"~":>{width + 1}}'
         red, green, blue = background
         return (
             f'\x1b[48;2;{red};{green};{blue}m'
-            + (' ' * (width + 1)) + self.RESET
+            + f'{"~":>{width + 1}}' + self.RESET
         )
 
     def _queue_output(self, output) -> None:
@@ -533,8 +533,8 @@ class TerminalUI:
                     name = name[:max_name_length - 1] + '…'
                 label = f' {name} '
                 style = self.SEARCH_SELECTED if self.search_selected == index else ''
-                block = style + label + ' ' + self.RESET
-                plain_len = len(label) + 1
+                block = style + label + self.RESET
+                plain_len = len(label)
                 if self._visible_len(line) + plain_len + 1 > columns and line:
                     blocks.append(line)
                     line = block
@@ -557,17 +557,9 @@ class TerminalUI:
                 self.NODE_SELECTED
                 if selected and not showing_namespaces else state_style
             )
-            # Keep the lifecycle color continuous across the selection key
-            # and node name.  The old renderer painted the key and label as
-            # separate fragments, leaving visible uncolored gaps in a dense
-            # launch such as rm2_bringup.  A muted node uses the mute palette
-            # for the complete block; selection still takes precedence.
-            if selected and not showing_namespaces:
-                block = label_style + label + ' ' + self.RESET
-            else:
-                block_style = self.MUTED_KEY if muted else label_style
-                block = block_style + key_text + label + ' ' + self.RESET
-            plain_len = 2 + len(label)
+            key_style = self.MUTED_KEY if muted else self.KEY
+            block = key_style + key_text + label_style + label + self.RESET
+            plain_len = 1 + len(label)
             if self._visible_len(line) + plain_len + 1 > columns and line:
                 blocks.append(line)
                 line = block

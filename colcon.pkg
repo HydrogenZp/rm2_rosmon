@@ -1,0 +1,5 @@
+{
+  "hooks": [
+    "share/rosmon2/environment/rosmon2-argcomplete.bash"
+  ]
+}
