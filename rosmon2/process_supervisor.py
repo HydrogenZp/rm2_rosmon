@@ -182,10 +182,7 @@ class ProcessSupervisor:
         )
         if should_restart:
             self._pending_restarts.discard(key)
-            loop = getattr(context, 'asyncio_loop', None)
-            if loop is None:
-                loop = asyncio.get_running_loop()
-            loop.call_soon(self.start, record)
+            self.runtime.call_soon(self.start, record)
         self._notify(record, f'process exited with code {event.returncode}')
         return record
 

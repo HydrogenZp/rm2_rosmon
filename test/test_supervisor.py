@@ -26,6 +26,10 @@ class _FakeRuntime:
     def request_process_stop(self, action):
         self.stops.append(action)
 
+    @staticmethod
+    def call_soon(callback, *args):
+        callback(*args)
+
 
 class _Event:
     def __init__(self, action, pid=100, returncode=0):

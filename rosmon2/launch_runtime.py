@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from typing import Callable, Optional
 
@@ -90,6 +91,10 @@ class LaunchRuntime:
         if self.service is None:
             raise RuntimeError('launch runtime is not prepared')
         self.service.include_launch_description(LaunchDescription([action]))
+
+    @staticmethod
+    def call_soon(callback, *args) -> None:
+        asyncio.get_running_loop().call_soon(callback, *args)
 
     def request_process_stop(self, action: object) -> None:
         if self.context is None:

@@ -153,7 +153,7 @@ class Supervisor:
         self._write_log(record.display_name, f'process started with pid {event.pid}', False)
         self._emit_event('node_started', node=self._record_dict(record))
         if self.no_start:
-            context.asyncio_loop.call_soon(self.stop, record)
+            self.runtime.call_soon(self.stop, record)
         self.ui.set_records(self.records)
 
     def _on_process_changed(self, record: ProcessRecord, reason: str) -> None:
