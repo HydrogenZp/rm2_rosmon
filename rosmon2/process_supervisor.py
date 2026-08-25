@@ -28,6 +28,7 @@ class ProcessSupervisor:
         self.on_changed = on_changed
         self.shutting_down = False
         self._pending_restarts: set[int] = set()
+        self._stop_tasks: dict[int, asyncio.Task] = {}
         self._state_event = asyncio.Event()
 
     def _notify(self, record: ProcessRecord, reason: str) -> None:
@@ -111,8 +112,60 @@ class ProcessSupervisor:
             self._set_state(record, ProcessState.STOPPING)
         record.expected_stop = True
         self._notify(record, f'{reason} stop requested')
-        self.runtime.request_process_stop(
-            record.action, process_name=record.process_name)
+        try:
+            os.kill(record.pid, signal.SIGINT)
+        except ProcessLookupError:
+            self._mark_forced_termination(
+                record, record.pid, 'process already exited')
+            return
+        except OSError:
+            return
+        self._schedule_stop_timeout(record)
+
+    def _schedule_stop_timeout(self, record: ProcessRecord) -> None:
+        """Own a fallback kill so launch escalation cannot strand a child."""
+        previous = self._stop_tasks.pop(record.key, None)
+        if previous is not None:
+            previous.cancel()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        task = loop.create_task(self._stop_after_timeout(record))
+        self._stop_tasks[record.key] = task
+        task.add_done_callback(
+            lambda completed, key=record.key: self._stop_tasks.pop(key, None)
+        )
+
+    async def _stop_after_timeout(self, record: ProcessRecord) -> None:
+        await asyncio.sleep(max(0.0, self.stop_timeout))
+        pid = record.pid
+        action = record.action
+        if pid is None or action is None or not record.expected_stop:
+            return
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        except OSError:
+            return
+        await asyncio.sleep(1.0)
+        if record.pid != pid:
+            return
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            return
+        except OSError:
+            return
+        if record.pid != pid:
+            return
+        record.exit_code = -signal.SIGKILL
+        self.registry.unbind(action)
+        self._mark_forced_termination(record, pid, 'stop timeout; process killed')
+        if record.key in self._pending_restarts and not self.shutting_down:
+            self._pending_restarts.discard(record.key)
+            self.runtime.call_soon(self.start, record)
 
     def restart(self, record: ProcessRecord) -> None:
         if self.shutting_down:
@@ -152,6 +205,9 @@ class ProcessSupervisor:
         if record.state is ProcessState.CRASHED:
             self._set_state(record, ProcessState.STARTING)
         self._set_state(record, ProcessState.RUNNING)
+        if record.expected_stop:
+            self.runtime.call_soon(
+                lambda: self.stop(record, reason='stop during start'))
         self._notify(record, f'process started with pid {event.pid}')
         return record
 
@@ -164,6 +220,9 @@ class ProcessSupervisor:
             self.registry.unbind(event.action)
             return None
         record.pid = None
+        stop_task = self._stop_tasks.pop(record.key, None)
+        if stop_task is not None:
+            stop_task.cancel()
         record.exit_code = event.returncode
         expected = record.expected_stop or self.shutting_down
         if record.state is ProcessState.RUNNING:
@@ -213,6 +272,12 @@ class ProcessSupervisor:
                     self._mark_forced_termination(
                         record, pid, 'forced process termination')
         await self.wait_stopped(1.0)
+        tasks = list(self._stop_tasks.values())
+        self._stop_tasks.clear()
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     def _mark_forced_termination(
             self, record: ProcessRecord, pid: int, reason: str) -> None:

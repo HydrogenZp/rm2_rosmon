@@ -521,7 +521,6 @@ class TerminalUI:
 
             key = selection_key(index)
             key_text = key if key is not None else ' '
-            key_style = self.MUTED_KEY if muted else self.KEY
             name = display_name if showing_namespaces else display_name.lstrip('/')
             # Keep the complete process name whenever it fits.  The status
             # area already wraps blocks onto additional rows, so shortening
@@ -535,7 +534,16 @@ class TerminalUI:
                 self.NODE_SELECTED
                 if selected and not showing_namespaces else state_style
             )
-            block = key_style + key_text + label_style + label + self.RESET
+            # Keep the lifecycle color continuous across the selection key
+            # and node name.  The old renderer painted the key and label as
+            # separate fragments, leaving visible uncolored gaps in a dense
+            # launch such as rm2_bringup.  A muted node uses the mute palette
+            # for the complete block; selection still takes precedence.
+            if selected and not showing_namespaces:
+                block = label_style + label + self.RESET
+            else:
+                block_style = self.MUTED_KEY if muted else label_style
+                block = block_style + key_text + label + self.RESET
             plain_len = 1 + len(label)
             if self._visible_len(line) + plain_len + 1 > columns and line:
                 blocks.append(line)

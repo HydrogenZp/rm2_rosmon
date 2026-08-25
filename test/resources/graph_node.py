@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Small real ROS node used by rosmon2 lifecycle integration tests."""
 
+import os
 import signal
 import sys
 
@@ -12,8 +13,12 @@ def main() -> int:
     name = sys.argv[1] if len(sys.argv) > 1 else 'rosmon2_probe'
     rclpy.init()
     node = Node(name)
-    signal.signal(signal.SIGTERM, lambda *_args: rclpy.shutdown())
-    signal.signal(signal.SIGINT, lambda *_args: rclpy.shutdown())
+    # Exit the Python process immediately after launch delivers a stop signal.
+    # Calling only ``rclpy.shutdown`` does not reliably wake ``rclpy.spin`` on
+    # every Jazzy executor path, which makes this fixture unsuitable for
+    # deterministic lifecycle/orphan-process tests.
+    signal.signal(signal.SIGTERM, lambda *_args: os._exit(0))
+    signal.signal(signal.SIGINT, lambda *_args: os._exit(0))
     try:
         rclpy.spin(node)
     finally:

@@ -106,6 +106,7 @@ class Supervisor:
             if session_started:
                 self._emit_event('session_stopping')
             await self.shutdown()
+            await self.runtime.cancel_tasks()
             self.runtime.restore_screen_stream()
             if self._control_server is not None and control_started:
                 await self._control_server.close()

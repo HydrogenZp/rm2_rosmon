@@ -1,8 +1,8 @@
-"""ROS distribution compatibility boundary for rosmon2.
+"""ROS 2 Jazzy launch compatibility boundary for rosmon2.
 
-Humble and Jazzy expose the launch argument parser through the nested
-``ros2launch.api.api`` module and do not provide a stable screen-handler
-setter.  All such version-sensitive access is intentionally kept here.
+Jazzy exposes the launch argument parser through the nested
+``ros2launch.api.api`` module and does not provide a stable screen-handler
+setter.  All version-sensitive access is intentionally kept here.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ def parse_arguments(arguments: list[str]):
 
 
 def _screen_stream(screen_handler: Any) -> Any:
-    """Return the current stream across Humble/Jazzy screen-handler variants.
+    """Return the current stream across Jazzy screen-handler variants.
 
     ``ScreenHandler.setStream`` is the only setter exposed by the launch
     logging API, but it does not consistently return the previous stream.

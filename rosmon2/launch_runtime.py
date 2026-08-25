@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import sys
 from typing import Callable, Optional
 
 from launch import LaunchDescription, LaunchService
 from launch.actions import ExecuteProcess, IncludeLaunchDescription, RegisterEventHandler
 from launch.event_handlers import OnProcessExit, OnProcessIO, OnProcessStart
+from launch.events import IncludeLaunchDescription as IncludeLaunchDescriptionEvent
 from launch.events import Shutdown
 from launch.events.process import ShutdownProcess
 from launch.launch_description_sources import AnyLaunchDescriptionSource
@@ -56,6 +58,7 @@ class LaunchRuntime:
         self._shutdown_requested = False
         self._shutdown_emitted = False
         self._screen_restore: Optional[Callable[[], None]] = None
+        self._event_tasks: set[asyncio.Task] = set()
 
     def prepare(self) -> None:
         """Create the service and include the initial launch description."""
@@ -91,7 +94,17 @@ class LaunchRuntime:
         """Add a restart action through the public LaunchService API."""
         if self.service is None:
             raise RuntimeError('launch runtime is not prepared')
-        self.service.include_launch_description(LaunchDescription([action]))
+        description = LaunchDescription([action])
+        # ``LaunchService.include_launch_description`` is thread-safe but its
+        # Jazzy implementation waits on a future when called while the launch
+        # loop is already running.  Calling it from a control-socket callback
+        # would therefore deadlock the loop and never return the response.
+        # Emit the public IncludeLaunchDescription event directly in that
+        # same-loop case; LaunchService remains the sole action executor.
+        if self.context is not None:
+            self._emit_context_event(IncludeLaunchDescriptionEvent(description))
+            return
+        self.service.include_launch_description(description)
 
     @staticmethod
     def call_soon(callback, *args) -> None:
@@ -121,9 +134,7 @@ class LaunchRuntime:
                     return True
             return False
 
-        self.context.emit_event_sync(
-            ShutdownProcess(process_matcher=matches)
-        )
+        self._emit_context_event(ShutdownProcess(process_matcher=matches))
 
     def request_shutdown(self) -> None:
         self._shutdown_requested = True
@@ -134,9 +145,37 @@ class LaunchRuntime:
         if self._shutdown_emitted:
             return
         self._shutdown_emitted = True
-        self.context.emit_event_sync(
-            Shutdown(reason='rosmon2 shutdown requested')
-        )
+        if self.service is not None:
+            result = self.service.shutdown()
+            if inspect.isawaitable(result):
+                task = asyncio.create_task(result)
+                self._event_tasks.add(task)
+                task.add_done_callback(self._event_tasks.discard)
+            return
+        self._emit_context_event(Shutdown(reason='rosmon2 shutdown requested'))
+
+    def _emit_context_event(self, event) -> None:
+        """Queue an event without blocking the currently running launch loop."""
+        if self.context is None:
+            return
+        if not hasattr(self.context, 'emit_event'):
+            self.context.emit_event_sync(event)
+            return
+        try:
+            task = asyncio.create_task(self.context.emit_event(event))
+        except RuntimeError:
+            self.context.emit_event_sync(event)
+            return
+        self._event_tasks.add(task)
+        task.add_done_callback(self._event_tasks.discard)
+
+    async def cancel_tasks(self) -> None:
+        tasks = list(self._event_tasks)
+        self._event_tasks.clear()
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     def attach_screen_stream(
             self, log: Callable[[str], None], flush: Callable[[], None]) -> None:

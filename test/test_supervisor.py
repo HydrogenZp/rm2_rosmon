@@ -103,6 +103,39 @@ def test_shutdown_marks_unreported_child_stopped_after_forced_kill(monkeypatch):
     assert record.expected_stop
 
 
+def test_stop_timeout_kills_child_and_starts_pending_restart(monkeypatch):
+    async def scenario():
+        registry = ProcessRegistry()
+        runtime = _FakeRuntime()
+        supervisor = ProcessSupervisor(registry, runtime, stop_timeout=0)
+        record = registry.create('probe')
+        record.cmd = ['/bin/sleep', '10']
+        action = object()
+        registry.bind(action, record)
+        record.action = action
+        record.pid = 654
+        record.state = State.RUNNING
+        killed = []
+        monkeypatch.setattr('rosmon2.process_supervisor.os.kill',
+                            lambda pid, sig: killed.append((pid, sig)))
+        supervisor._pending_restarts.add(record.key)
+
+        supervisor.stop(record, reason='restart')
+        await asyncio.sleep(1.1)
+
+        assert killed[:2] == [
+            (654, signal.SIGINT),
+            (654, signal.SIGTERM),
+        ]
+        assert killed[-1] == (654, signal.SIGKILL)
+        assert record.pid is None
+        assert record.state is State.STARTING
+        assert runtime.includes
+
+    import signal
+    asyncio.run(scenario())
+
+
 def test_display_names_do_not_include_the_root_slash():
     assert Supervisor._normalize_display_name('/talker') == 'talker'
     assert Supervisor._normalize_display_name('/robot/talker') == 'robot/talker'
