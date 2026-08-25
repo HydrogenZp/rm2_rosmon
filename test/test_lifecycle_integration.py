@@ -47,6 +47,14 @@ def _graph_nodes():
     return set(result.stdout.splitlines())
 
 
+def _pid_exists(pid):
+    try:
+        os.kill(pid, 0)
+    except (ProcessLookupError, PermissionError):
+        return False
+    return True
+
+
 @pytest.fixture
 def session(tmp_path, monkeypatch):
     name = f'test_{os.getpid()}_{time.time_ns()}'[-50:]
@@ -87,9 +95,11 @@ def _status(client):
 def test_real_start_stop_restart_updates_ros_graph(session):
     process, client = session
     _wait_until(lambda: '/rosmon2_probe' in _graph_nodes())
+    first_pid = _status(client)['nodes'][0]['pid']
 
     client.request({'command': 'stop', 'node': '/rosmon2_probe'})
     _wait_until(lambda: _status(client)['summary']['stopped'] == 1)
+    _wait_until(lambda: not _pid_exists(first_pid))
     _wait_until(lambda: '/rosmon2_probe' not in _graph_nodes())
 
     client.request({'command': 'restart', 'node': '/rosmon2_probe'})
@@ -103,6 +113,7 @@ def test_real_crash_is_distinguished_and_restart_has_new_pid(session):
     first = _status(client)['nodes'][0]
     os.kill(first['pid'], signal.SIGKILL)
     _wait_until(lambda: _status(client)['summary']['crashed'] == 1)
+    _wait_until(lambda: not _pid_exists(first['pid']))
 
     client.request({'command': 'restart', 'node': first['name']})
     _wait_until(lambda: _status(client)['summary']['running'] == 1)
@@ -114,7 +125,9 @@ def test_real_crash_is_distinguished_and_restart_has_new_pid(session):
 def test_signal_shutdown_leaves_no_ros_graph_node(session, sig):
     process, client = session
     _wait_until(lambda: '/rosmon2_probe' in _graph_nodes())
+    child_pid = _status(client)['nodes'][0]['pid']
     process.send_signal(sig)
     process.wait(timeout=15)
     assert not session_socket_path(client.session).exists()
+    _wait_until(lambda: not _pid_exists(child_pid))
     _wait_until(lambda: '/rosmon2_probe' not in _graph_nodes())
