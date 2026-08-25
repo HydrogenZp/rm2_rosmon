@@ -3,6 +3,8 @@ import asyncio
 from launch_ros.actions import Node
 
 from rosmon2.model import ProcessRecord, State
+from rosmon2.process_supervisor import ProcessSupervisor
+from rosmon2.registry import ProcessRegistry
 from rosmon2.supervisor import Supervisor
 
 
@@ -10,6 +12,66 @@ class _UnnamedNode(Node):
     @property
     def node_name(self):
         return '/ur10e/<node_name_unspecified>'
+
+
+class _FakeRuntime:
+    def __init__(self):
+        self.context = object()
+        self.stops = []
+        self.includes = []
+
+    def include_process(self, action):
+        self.includes.append(action)
+
+    def request_process_stop(self, action):
+        self.stops.append(action)
+
+
+class _Event:
+    def __init__(self, action, pid=100, returncode=0):
+        self.action = action
+        self.pid = pid
+        self.returncode = returncode
+        self.cmd = ['/bin/sleep', '10']
+        self.cwd = None
+        self.env = None
+        self.process_name = 'probe-1'
+
+
+def test_process_supervisor_distinguishes_expected_stop_from_crash():
+    registry = ProcessRegistry()
+    runtime = _FakeRuntime()
+    supervisor = ProcessSupervisor(registry, runtime)
+    record = registry.create('probe')
+    action = object()
+    registry.bind(action, record)
+
+    supervisor.on_start(_Event(action), None)
+    assert record.state is State.RUNNING
+    supervisor.stop(record)
+    supervisor.on_exit(_Event(action, returncode=-15), None)
+    assert record.state is State.STOPPED
+    assert record.expected_stop
+
+    record.state = State.RUNNING
+    record.pid = 101
+    record.expected_stop = False
+    registry.bind(action, record)
+    supervisor.on_exit(_Event(action, returncode=0), None)
+    assert record.state is State.CRASHED
+
+
+def test_process_supervisor_rejects_restart_after_shutdown():
+    registry = ProcessRegistry()
+    runtime = _FakeRuntime()
+    supervisor = ProcessSupervisor(registry, runtime)
+    record = registry.create('probe')
+    record.cmd = ['/bin/true']
+    supervisor.shutting_down = True
+
+    supervisor.restart(record)
+
+    assert not runtime.includes
 
 
 def test_display_names_do_not_include_the_root_slash():
