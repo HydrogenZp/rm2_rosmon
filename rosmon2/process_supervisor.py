@@ -111,7 +111,8 @@ class ProcessSupervisor:
             self._set_state(record, ProcessState.STOPPING)
         record.expected_stop = True
         self._notify(record, f'{reason} stop requested')
-        self.runtime.request_process_stop(record.action)
+        self.runtime.request_process_stop(
+            record.action, process_name=record.process_name)
 
     def restart(self, record: ProcessRecord) -> None:
         if self.shutting_down:
@@ -143,6 +144,7 @@ class ProcessSupervisor:
         record.cmd = list(event.cmd)
         record.cwd = event.cwd
         record.env = dict(event.env) if event.env else None
+        record.process_name = event.process_name
         record.pid = event.pid
         record.exit_code = None
         if record.state is ProcessState.STOPPED:

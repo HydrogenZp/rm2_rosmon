@@ -32,6 +32,7 @@ class ProcessRecord:
     cmd: List[str] = field(default_factory=list)
     cwd: Optional[str] = None
     env: Optional[Dict[str, str]] = None
+    process_name: Optional[str] = None
     pid: Optional[int] = None
     exit_code: Optional[int] = None
     restart_count: int = 0

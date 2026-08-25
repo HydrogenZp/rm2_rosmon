@@ -23,8 +23,8 @@ class _FakeRuntime:
     def include_process(self, action):
         self.includes.append(action)
 
-    def request_process_stop(self, action):
-        self.stops.append(action)
+    def request_process_stop(self, action, *, process_name=None):
+        self.stops.append((action, process_name))
 
     @staticmethod
     def call_soon(callback, *args):

@@ -97,11 +97,32 @@ class LaunchRuntime:
     def call_soon(callback, *args) -> None:
         asyncio.get_running_loop().call_soon(callback, *args)
 
-    def request_process_stop(self, action: object) -> None:
+    def request_process_stop(
+            self, action: object, *, process_name: Optional[str] = None) -> None:
         if self.context is None:
             raise RuntimeError('launch context is not available')
+
+        names = {
+            value for value in (
+                process_name,
+                getattr(action, 'name', None),
+                getattr(action, 'process_name', None),
+            ) if isinstance(value, str)
+        }
+
+        def matches(candidate) -> bool:
+            if candidate is action:
+                return True
+            if isinstance(candidate, str):
+                return candidate in names
+            for attribute in ('action', 'process_name', 'name'):
+                value = getattr(candidate, attribute, None)
+                if value is action or (isinstance(value, str) and value in names):
+                    return True
+            return False
+
         self.context.emit_event_sync(
-            ShutdownProcess(process_matcher=lambda candidate: candidate is action)
+            ShutdownProcess(process_matcher=matches)
         )
 
     def request_shutdown(self) -> None:

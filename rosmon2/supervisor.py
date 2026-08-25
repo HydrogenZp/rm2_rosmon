@@ -436,6 +436,7 @@ class Supervisor:
             'restart_count': record.restart_count,
             'exit_code': record.exit_code,
             'return_code': record.exit_code,
+            'process_name': record.process_name,
             'expected_stop': record.expected_stop,
             'command': list(record.cmd),
         }
