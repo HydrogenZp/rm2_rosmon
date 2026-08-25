@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import signal
+import shutil
 import subprocess
 import sys
 import time
@@ -20,6 +21,10 @@ from rosmon2.control import ControlClient, session_socket_path
 
 ROOT = Path(__file__).parent
 LAUNCH_FILE = ROOT / 'resources' / 'lifecycle.launch.py'
+pytestmark = pytest.mark.skipif(
+    shutil.which('ros2') is None,
+    reason='ROS2 CLI is required for lifecycle integration tests',
+)
 
 
 def _wait_until(predicate, timeout=15.0):
