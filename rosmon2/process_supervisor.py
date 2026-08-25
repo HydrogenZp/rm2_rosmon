@@ -102,8 +102,6 @@ class ProcessSupervisor:
     def stop(self, record: ProcessRecord, *, reason: str = 'user') -> None:
         if record.pid is None or record.action is None:
             record.expected_stop = True
-            if reason == 'launch shutdown' and record.state is not ProcessState.STOPPED:
-                record.state = ProcessState.STOPPED
             self._notify(record, f'{reason} stop requested')
             return
         if record.state is ProcessState.STOPPING:
