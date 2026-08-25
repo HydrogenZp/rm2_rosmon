@@ -53,6 +53,23 @@ def test_log_row_keeps_process_label_context_and_message(capsys):
     assert '[receiver]' in output
 
 
+def test_wrapped_output_keeps_colored_source_gutter(monkeypatch, capsys):
+    ui = TerminalUI(False, lambda _key: None)
+    ui.enabled = True
+    ui.records = [ProcessRecord(key=0, display_name='controllers/ros2_control_node')]
+    monkeypatch.setattr(
+        'rosmon2.terminal.shutil.get_terminal_size',
+        lambda _fallback: os.terminal_size((40, 24)),
+    )
+
+    ui.log('controllers/ros2_control_node', 'a' * 80)
+    output = capsys.readouterr().out
+    plain = ANSI_RE.sub('', output)
+    assert plain.count('controllers/ros2_control_node:') == 1
+    assert '\n' in plain
+    assert output.count('\x1b[48;2;') >= 2
+
+
 def test_processes_get_distinct_stable_label_colors():
     ui = TerminalUI(False, lambda _key: None)
     ui.records = [

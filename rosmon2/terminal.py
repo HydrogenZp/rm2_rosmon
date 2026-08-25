@@ -7,6 +7,7 @@ import signal
 import shutil
 import sys
 import termios
+import textwrap
 import time
 import tty
 from typing import Callable, Iterable, Optional
@@ -275,8 +276,10 @@ class TerminalUI:
                 continue
             line = self._message_body(line)
             label = self._plain_label(source, width)
+            gutter = ' ' * (width + 1)
             if self.enabled:
                 label = self._styled_label(source, width)
+                gutter = self._styled_gutter(source, width) + ' '
                 style = {
                     'DEBUG': '\x1b[32m',
                     'WARNING': '\x1b[33m',
@@ -285,7 +288,16 @@ class TerminalUI:
                 }.get(line_severity, '')
                 if style:
                     line = style + line + self.RESET
-            output.append(f'{label} {line}\n')
+                columns = max(20, shutil.get_terminal_size((120, 24)).columns)
+                message_width = max(1, columns - width - 2)
+                chunks = textwrap.wrap(
+                    ANSI_RE.sub('', line), width=message_width,
+                    replace_whitespace=False, drop_whitespace=False,
+                ) or ['']
+                output.append(f'{label} {chunks[0]}\n')
+                output.extend(f'{gutter}{chunk}\n' for chunk in chunks[1:])
+            else:
+                output.append(f'{label} {line}\n')
         if output:
             self._queue_output(output)
 
@@ -370,6 +382,17 @@ class TerminalUI:
             )
         self._styled_labels[key] = styled
         return styled
+
+    def _styled_gutter(self, source: str, width: int) -> str:
+        """Paint the fixed source column on wrapped continuation lines."""
+        background = self._label_colors.get(source)
+        if background is None:
+            return ' ' * (width + 1)
+        red, green, blue = background
+        return (
+            f'\x1b[48;2;{red};{green};{blue}m'
+            + (' ' * (width + 1)) + self.RESET
+        )
 
     def _queue_output(self, output) -> None:
         self._output_buffer.extend(output)
