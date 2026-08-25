@@ -13,6 +13,8 @@ setup(
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        ('share/' + package_name + '/environment',
+         ['environment/rosmon2-argcomplete.bash']),
         (os.path.join('share', package_name, 'launch'),
          [path for path in glob('launch/*') if os.path.isfile(path)]),
         (os.path.join('share', package_name, 'test', 'resources'),

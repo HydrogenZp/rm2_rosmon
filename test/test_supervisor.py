@@ -61,8 +61,22 @@ def test_process_supervisor_distinguishes_expected_stop_from_crash():
     record.pid = 101
     record.expected_stop = False
     registry.bind(action, record)
-    supervisor.on_exit(_Event(action, returncode=0), None)
+    supervisor.on_exit(_Event(action, returncode=1), None)
     assert record.state is State.CRASHED
+
+
+def test_process_supervisor_marks_clean_one_shot_exit_stopped():
+    registry = ProcessRegistry()
+    runtime = _FakeRuntime()
+    supervisor = ProcessSupervisor(registry, runtime)
+    record = registry.create('spawner')
+    action = object()
+    registry.bind(action, record)
+
+    supervisor.on_start(_Event(action), None)
+    supervisor.on_exit(_Event(action, returncode=0), None)
+
+    assert record.state is State.STOPPED
 
 
 def test_process_supervisor_rejects_restart_after_shutdown():

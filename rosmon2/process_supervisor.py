@@ -225,17 +225,28 @@ class ProcessSupervisor:
             stop_task.cancel()
         record.exit_code = event.returncode
         expected = record.expected_stop or self.shutting_down
+        normal_exit = event.returncode == 0
         if record.state is ProcessState.RUNNING:
-            self._set_state(record, ProcessState.STOPPING if expected else ProcessState.CRASHED)
-        elif record.state is ProcessState.STARTING and not expected:
+            self._set_state(
+                record,
+                ProcessState.STOPPING
+                if expected or normal_exit else ProcessState.CRASHED,
+            )
+        elif (record.state is ProcessState.STARTING
+              and not expected and not normal_exit):
             self._set_state(record, ProcessState.CRASHED)
         if expected and record.state is ProcessState.STOPPING:
             self._set_state(record, ProcessState.STOPPED)
         elif expected and record.state is ProcessState.STARTING:
             # A launch can report exit before ProcessStarted is delivered.
             record.state = ProcessState.STOPPED
-        elif not expected and record.state is ProcessState.STOPPING:
+        elif (not expected and not normal_exit
+              and record.state is ProcessState.STOPPING):
             self._set_state(record, ProcessState.CRASHED)
+        if normal_exit and record.state is ProcessState.STOPPING:
+            self._set_state(record, ProcessState.STOPPED)
+        elif normal_exit and record.state is ProcessState.STARTING:
+            record.state = ProcessState.STOPPED
         self.registry.unbind(event.action)
         key = record.key
         should_restart = (

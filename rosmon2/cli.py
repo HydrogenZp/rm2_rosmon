@@ -10,15 +10,59 @@ from datetime import datetime
 from pathlib import Path
 
 from ament_index_python.packages import PackageNotFoundError
+from ament_index_python.packages import get_package_share_directory
 from launch.launch_description_sources import get_launch_description_from_any_launch_file
 from ros2launch.api import get_share_file_path_from_package
 from ros2launch.api import print_arguments_of_launch_file
+
+try:
+    from argcomplete import autocomplete
+    from argcomplete.completers import FilesCompleter
+    from ros2launch.api import is_launch_file
+    from ros2launch.api.api import get_launch_file_paths
+    from ros2pkg.api import package_name_completer
+except ImportError:  # argcomplete is optional outside a ROS shell
+    autocomplete = None
 
 from .control import ControlClient, ControlError, validate_session_name
 from .supervisor import Supervisor
 
 
 ROSMON_CONSOLE_OUTPUT_FORMAT = '[{severity}] [{function_name}]: {message}'
+
+
+def _launch_spec_completer(prefix, parsed_args, **kwargs):
+    """Match Jazzy ``ros2 launch`` package/path/file completion."""
+    values = getattr(parsed_args, 'launch_spec', None) or []
+    if any(':=' in value for value in values):
+        return ()
+    if len(values) == 1:
+        try:
+            share = get_package_share_directory(values[0])
+        except PackageNotFoundError:
+            share = None
+        if share is not None:
+            paths = get_launch_file_paths(path=share)
+            return [os.path.basename(path) for path in paths
+                    if os.path.basename(path).startswith(prefix)]
+    if not values:
+        completions = list(package_name_completer(
+            prefix=prefix, parsed_args=parsed_args, **kwargs))
+        try:
+            completions.extend(filter(
+                lambda path: is_launch_file(path) or os.path.isdir(path),
+                FilesCompleter()(prefix=prefix, parsed_args=parsed_args, **kwargs),
+            ))
+        except NameError:
+            pass
+        return completions
+    try:
+        share = get_package_share_directory(values[0])
+        paths = get_launch_file_paths(path=share)
+    except (PackageNotFoundError, IndexError):
+        return ()
+    return [os.path.basename(path) for path in paths
+            if os.path.basename(path).startswith(prefix)]
 
 
 def configure_ros_console_output() -> None:
@@ -61,7 +105,10 @@ def make_parser() -> argparse.ArgumentParser:
     launch_parser.add_argument('--no-start', action='store_true',
                                help="discover processes but don't leave them running")
     launch_parser.add_argument('--stop-timeout', type=float, default=5.0, metavar='SECONDS')
-    launch_parser.add_argument('launch_spec', nargs='+', metavar='LAUNCH')
+    launch_spec = launch_parser.add_argument(
+        'launch_spec', nargs='+', metavar='LAUNCH')
+    if autocomplete is not None:
+        launch_spec.completer = _launch_spec_completer
 
     def add_client_options(command_parser):
         command_parser.add_argument(
@@ -155,6 +202,9 @@ async def _run_supervisor(supervisor: Supervisor) -> int:
 
 def main(argv=None) -> int:
     parser = make_parser()
+    if autocomplete is not None:
+        autocomplete(parser, exclude=['-h', '--help'],
+                     always_complete_options=False)
     args = parser.parse_args(argv)
     if args.command is None:
         parser.print_help()

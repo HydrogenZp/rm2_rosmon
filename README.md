@@ -49,6 +49,13 @@ You can launch a file by package and filename, as above, or by path:
 mon2 launch path/to/system.launch.py use_sim_time:=true
 ```
 
+For Bash package and launch-file completion, source the optional completion
+hook once in the current shell:
+
+```bash
+source install/rosmon2/share/rosmon2/environment/rosmon2-argcomplete.bash
+```
+
 The `rosmon2` executable is an alias for `mon2`, so this is equivalent:
 
 ```bash

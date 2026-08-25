@@ -510,8 +510,8 @@ class TerminalUI:
                     name = name[:max_name_length - 1] + '…'
                 label = f' {name} '
                 style = self.SEARCH_SELECTED if self.search_selected == index else ''
-                block = style + label + self.RESET
-                plain_len = len(label)
+                block = style + label + ' ' + self.RESET
+                plain_len = len(label) + 1
                 if self._visible_len(line) + plain_len + 1 > columns and line:
                     blocks.append(line)
                     line = block
@@ -540,11 +540,11 @@ class TerminalUI:
             # launch such as rm2_bringup.  A muted node uses the mute palette
             # for the complete block; selection still takes precedence.
             if selected and not showing_namespaces:
-                block = label_style + label + self.RESET
+                block = label_style + label + ' ' + self.RESET
             else:
                 block_style = self.MUTED_KEY if muted else label_style
-                block = block_style + key_text + label + self.RESET
-            plain_len = 1 + len(label)
+                block = block_style + key_text + label + ' ' + self.RESET
+            plain_len = 2 + len(label)
             if self._visible_len(line) + plain_len + 1 > columns and line:
                 blocks.append(line)
                 line = block
