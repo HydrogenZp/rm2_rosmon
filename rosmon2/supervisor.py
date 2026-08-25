@@ -177,7 +177,9 @@ class Supervisor:
     def _on_output(self, event, is_stderr: bool):
         record = self.registry.by_action(event.action)
         source = record.display_name if record else event.process_name
-        text = event.text.decode(errors='replace')
+        raw_text = event.text
+        text = (raw_text.decode(errors='replace')
+                if isinstance(raw_text, (bytes, bytearray)) else str(raw_text))
         self._write_log(source, text.rstrip('\n'), is_stderr)
         self._record_output(source, text, is_stderr)
         if record is None or not record.muted:
