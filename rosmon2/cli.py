@@ -58,22 +58,9 @@ def make_parser() -> argparse.ArgumentParser:
     launch_parser.add_argument(
         '--no-control', action='store_true',
         help='do not create a local control socket')
-    launch_parser.add_argument(
-        '--codex-command', default='codex', metavar='PATH',
-        help='Codex CLI used by F3 diagnosis and the F4 agent (default: codex)')
-    launch_parser.add_argument(
-        '--codex-workspace', metavar='DIR',
-        help='workspace Codex may inspect or edit (default: current directory)')
     launch_parser.add_argument('--no-start', action='store_true',
                                help="discover processes but don't leave them running")
     launch_parser.add_argument('--stop-timeout', type=float, default=5.0, metavar='SECONDS')
-    launch_parser.add_argument(
-        '--disable-diagnostics', action='store_true', help=argparse.SUPPRESS)
-    launch_parser.add_argument('--diagnostics-prefix', help=argparse.SUPPRESS)
-    launch_parser.add_argument('--cpu-limit', help=argparse.SUPPRESS)
-    launch_parser.add_argument('--memory-limit', help=argparse.SUPPRESS)
-    launch_parser.add_argument('--output-attr', choices=['obey', 'ignore'], help=argparse.SUPPRESS)
-    launch_parser.add_argument('--auto-increment-spawn-delay', type=float, help=argparse.SUPPRESS)
     launch_parser.add_argument('launch_spec', nargs='+', metavar='LAUNCH')
 
     def add_client_options(command_parser):
@@ -120,7 +107,8 @@ def make_parser() -> argparse.ArgumentParser:
     add_client_options(wait_parser)
     add_target_options(wait_parser)
     wait_parser.add_argument(
-        '--state', choices=[state for state in ('running', 'idle', 'crashed', 'waiting')],
+        '--state', choices=[state for state in (
+            'stopped', 'starting', 'running', 'stopping', 'crashed')],
         default='running')
     wait_parser.add_argument('--timeout', type=float, default=30.0)
     return parser
@@ -155,7 +143,7 @@ async def _run_supervisor(supervisor: Supervisor) -> int:
         nonlocal stopping
         if not stopping:
             stopping = True
-            loop.create_task(supervisor.shutdown())
+            supervisor.request_shutdown()
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
@@ -212,8 +200,6 @@ def main(argv=None) -> int:
         session=args.session,
         json_events=args.json_events,
         control=not args.no_control,
-        codex_command=args.codex_command,
-        codex_workspace=args.codex_workspace,
     )
     try:
         return asyncio.run(_run_supervisor(supervisor))

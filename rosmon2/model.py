@@ -1,36 +1,82 @@
-"""Process state model used by the supervisor and terminal UI."""
+"""Pure process state and record types used by rosmon2."""
 
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional
 
 
-class State(Enum):
-    """Visible process states, matching rosmon's state vocabulary."""
+class ProcessState(Enum):
+    """States in the process lifecycle state machine."""
 
-    IDLE = 'idle'
+    STOPPED = 'stopped'
+    STARTING = 'starting'
     RUNNING = 'running'
+    STOPPING = 'stopping'
     CRASHED = 'crashed'
-    WAITING = 'waiting'
+
+
+
+# Short import retained for callers; the enum itself has explicit names.
+State = ProcessState
 
 
 @dataclass
 class ProcessRecord:
-    """All information needed to display and restart one launch process."""
+    """Observable information for one logical launch process."""
 
     key: int
     display_name: str
-    state: State = State.WAITING
+    namespace: str = '/'
+    state: ProcessState = ProcessState.STOPPED
     action: object = None
     cmd: List[str] = field(default_factory=list)
     cwd: Optional[str] = None
     env: Optional[Dict[str, str]] = None
     pid: Optional[int] = None
-    muted: bool = False
-    manually_stopped: bool = False
+    exit_code: Optional[int] = None
     restart_count: int = 0
-    return_code: Optional[int] = None
-    agent_created: bool = False
+    expected_stop: bool = False
+    muted: bool = False
+
+    @property
+    def name(self) -> str:
+        return self.display_name
+
+    @name.setter
+    def name(self, value: str) -> None:
+        self.display_name = value
+
+    @property
+    def command(self) -> List[str]:
+        return self.cmd
+
+    @command.setter
+    def command(self, value: List[str]) -> None:
+        self.cmd = value
+
+    @property
+    def environment(self) -> Optional[Dict[str, str]]:
+        return self.env
+
+    @environment.setter
+    def environment(self, value: Optional[Dict[str, str]]) -> None:
+        self.env = value
+
+    @property
+    def return_code(self) -> Optional[int]:
+        return self.exit_code
+
+    @return_code.setter
+    def return_code(self, value: Optional[int]) -> None:
+        self.exit_code = value
+
+    @property
+    def manually_stopped(self) -> bool:
+        return self.expected_stop
+
+    @manually_stopped.setter
+    def manually_stopped(self, value: bool) -> None:
+        self.expected_stop = value
 
 
 def selection_key(index: int) -> Optional[str]:

@@ -4,7 +4,6 @@ import pytest
 
 from rosmon2.cli import (
     configure_ros_console_output,
-    make_parser,
     resolve_launch_spec,
     ROSMON_CONSOLE_OUTPUT_FORMAT,
 )
@@ -34,15 +33,3 @@ def test_rosmon_console_format_uses_function_and_respects_override(monkeypatch):
     monkeypatch.setenv('RCUTILS_CONSOLE_OUTPUT_FORMAT', '{message}')
     configure_ros_console_output()
     assert os.environ['RCUTILS_CONSOLE_OUTPUT_FORMAT'] == '{message}'
-
-
-def test_launch_parser_accepts_codex_cli_configuration():
-    args = make_parser().parse_args([
-        'launch',
-        '--codex-command', '/opt/codex',
-        '--codex-workspace', '/work/robot',
-        'robot.launch.py',
-    ])
-
-    assert args.codex_command == '/opt/codex'
-    assert args.codex_workspace == '/work/robot'

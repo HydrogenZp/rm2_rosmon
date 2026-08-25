@@ -1,18 +1,14 @@
 """Small ANSI terminal UI patterned after rosmon's interface."""
 
-import json
 from math import cos, pi, sin
 import os
-from pathlib import Path
 import re
 import signal
 import shutil
 import sys
 import termios
-import textwrap
 import time
 import tty
-from collections import deque
 from typing import Callable, Iterable, Optional
 
 from .model import ProcessRecord, selection_key, State
@@ -24,64 +20,6 @@ ROS_CONSOLE_PREFIX_RE = re.compile(
     r'^\s*\[(?:DEBUG|INFO|WARN|WARNING|ERROR|FATAL)\]'
     r'(?:\s+\[[^\]\r\n]*\])*\s+\[(?P<context>[^\]\r\n]*)\]'
     r'\s*:\s*(?P<message>.*)$'
-)
-HARDWARE_HIGHLIGHTS = (
-    (
-        re.compile(
-            r'(?<![A-Za-z0-9])(?:UR(?:3|5|10|16|20|30)e?|'
-            r'Universal\s+Robots?)(?![A-Za-z0-9])',
-            re.IGNORECASE,
-        ),
-        '\x1b[1;38;2;230;120;255m',
-    ),
-    (
-        re.compile(
-            r'(?<![A-Za-z0-9])Robotiq(?:\s+(?:2F-\d+|Hand-E|FT\s*300))?'
-            r'(?![A-Za-z0-9])',
-            re.IGNORECASE,
-        ),
-        '\x1b[1;38;2;80;220;255m',
-    ),
-    (
-        re.compile(
-            r'(?<![A-Za-z0-9])OAK(?:-D(?:-(?:Lite|Pro|S2|PoE))?)?'
-            r'(?![A-Za-z0-9])',
-            re.IGNORECASE,
-        ),
-        '\x1b[1;38;2;100;240;150m',
-    ),
-    (
-        re.compile(
-            r'(?<![A-Za-z0-9])(?:Intel\s+)?RealSense(?:\s+[A-Z]?\d{3})?'
-            r'(?![A-Za-z0-9])|'
-            r'(?<![A-Za-z0-9])(?:D4(?:15|35|55)|L515)(?![A-Za-z0-9])',
-            re.IGNORECASE,
-        ),
-        '\x1b[1;38;2;255;220;90m',
-    ),
-    (
-        re.compile(
-            r'(?<![A-Za-z0-9])(?:LiDAR|Velodyne|Hokuyo|Livox|Ouster)'
-            r'(?![A-Za-z0-9])',
-            re.IGNORECASE,
-        ),
-        '\x1b[1;38;2;255;155;70m',
-    ),
-    (
-        re.compile(
-            r'(?<![A-Za-z0-9])ZED(?:\s*(?:2|2i|X|Mini))?'
-            r'(?![A-Za-z0-9])',
-            re.IGNORECASE,
-        ),
-        '\x1b[1;38;2;100;170;255m',
-    ),
-    (
-        re.compile(
-            r'(?<![A-Za-z0-9])Vive(?:\s+Tracker)?(?![A-Za-z0-9])',
-            re.IGNORECASE,
-        ),
-        '\x1b[1;38;2;255;120;190m',
-    ),
 )
 RGB_MATRIX = (
     (3.2406, -1.5372, -0.4986),
@@ -138,26 +76,6 @@ class TerminalUI:
     OUTPUT_BUFFER_LIMIT = 64 * 1024
     REDRAW_INTERVAL = 1.0 / 30.0
     RESIZE_REDRAW_DELAY = 0.10
-    CODEX_SPINNER_INTERVAL = 0.12
-    CODEX_SPINNER_FRAMES = ('⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏')
-    CODEX_VISIBLE_LINES = 16
-    CODEX_MODEL_VISIBLE_ROWS = 8
-    DEFAULT_CODEX_MODEL = 'gpt-5.5'
-    DEFAULT_CODEX_MODEL_LABEL = 'GPT-5.5'
-    DEFAULT_CODEX_ACCESS_MODE = 'full-access'
-    DEFAULT_CODEX_REASONING_EFFORT = 'medium'
-    CODEX_REASONING_EFFORTS = (
-        ('none', 'None'),
-        ('minimal', 'Minimal'),
-        ('low', 'Low'),
-        ('medium', 'Medium'),
-        ('high', 'High'),
-        ('xhigh', 'Extra high'),
-        ('max', 'Maximum'),
-    )
-    DIAGNOSIS_CHAT_VISIBLE_LINES = 12
-    DIAGNOSIS_VISIBLE_ROWS = 10
-    DIAGNOSIS_SUMMARY_LINES = 4
     RESET = '\x1b[0m'
     # Exact true-color styles from rosmon's UI. Its packed 0xBBGGRR values
     # 0x404000, 0x606000, and 0xC8C8C8 become the RGB values below.
@@ -167,17 +85,14 @@ class TerminalUI:
     CRASHED = '\x1b[38;2;0;0;0m\x1b[48;2;178;24;24m'
     PARTIAL = '\x1b[38;2;0;0;0m\x1b[48;2;200;200;0m'
     WAITING = '\x1b[38;2;0;0;0m\x1b[48;2;178;104;24m'
-    AGENT_CREATED = '\x1b[38;2;0;0;0m\x1b[48;2;255;165;0m'
     IDLE = '\x1b[38;2;255;255;255m\x1b[48;2;0;0;0m'
     NODE_SELECTED = '\x1b[38;2;0;0;0m\x1b[48;2;135;206;250m'
     SEARCH_SELECTED = '\x1b[38;2;0;0;0m\x1b[48;2;0;178;178m'
     KEY = '\x1b[38;2;0;0;0m\x1b[48;2;200;200;200m'
     MUTED_KEY = '\x1b[38;2;255;255;255m\x1b[48;2;165;0;0m'
 
-    def __init__(
-            self, enabled: bool, on_key: Callable[[str], None],
-            output_enabled: bool = True,
-            agent_settings_path: Optional[Path] = None):
+    def __init__(self, enabled: bool, on_key: Callable[[str], None],
+                 output_enabled: bool = True):
         self.enabled = bool(enabled and sys.stdin.isatty() and sys.stdout.isatty())
         self.output_enabled = output_enabled
         self.on_key = on_key
@@ -188,50 +103,6 @@ class TerminalUI:
         self.search_active = False
         self.search_query = ''
         self.search_selected = 0
-        # The Codex panel deliberately lives in the same persistent footer as
-        # the node list.  A separate full-screen terminal would take control
-        # away from the monitor and make it easy to accidentally stop a live
-        # launch while asking a diagnostic question.
-        self.codex_active = False
-        self.codex_prompt = ''
-        self.codex_status = 'Ready'
-        self.codex_running = False
-        self.codex_usage_remaining: Optional[int] = None
-        self.codex_usage_loading = False
-        self.codex_models = []
-        self.codex_models_loading = False
-        self.codex_selected_model: Optional[str] = self.DEFAULT_CODEX_MODEL
-        self.codex_model_picker_active = False
-        self.codex_model_picker_selected = 0
-        self.codex_model_picker_stage = 'root'
-        self.codex_model_picker_pending_model: Optional[str] = None
-        self.codex_reasoning_efforts = {}
-        self.codex_access_mode = self.DEFAULT_CODEX_ACCESS_MODE
-        self.codex_logged_in: Optional[bool] = None
-        self.agent_settings_path = (
-            Path(agent_settings_path).expanduser()
-            if agent_settings_path is not None else None
-        )
-        self.codex_messages = deque()
-        self.codex_stream_text = ''
-        self.codex_execution_label: Optional[str] = None
-        self.codex_scroll_offset = 0
-        self._codex_rendered_line_count = 0
-        self._codex_spinner_index = 0
-        self._codex_spinner_timer = None
-        self.diagnosis_active = False
-        self.diagnosis_selected = 0
-        self.diagnosis_chat_focused = False
-        self.diagnosis_rows = []
-        self.diagnosis_running = False
-        self.diagnosis_summary = []
-        self.diagnosis_prompt = ''
-        self.diagnosis_messages = deque()
-        self.diagnosis_stream_text = ''
-        self.diagnosis_execution_label: Optional[str] = None
-        self.diagnosis_chat_running = False
-        self.diagnosis_chat_scroll_offset = 0
-        self._diagnosis_chat_rendered_line_count = 0
         self.warn_only = False
         self._saved_termios = None
         self._status_lines = 0
@@ -253,717 +124,6 @@ class TerminalUI:
         self._plain_labels = {}
         self._styled_labels = {}
         self._started = False
-        self._load_agent_settings()
-
-    def _load_agent_settings(self) -> None:
-        """Restore confirmed F2 model, thinking, and access selections."""
-        if self.agent_settings_path is None:
-            return
-        try:
-            data = json.loads(
-                self.agent_settings_path.read_text(encoding='utf-8'))
-        except (OSError, UnicodeError, json.JSONDecodeError):
-            return
-        if not isinstance(data, dict):
-            return
-        model = data.get('model')
-        if model is None or (
-                isinstance(model, str) and 0 < len(model) <= 256):
-            self.codex_selected_model = model
-        access_mode = data.get('access_mode')
-        valid_access_modes = {
-            choice['mode'] for choice in self._codex_access_choices()
-        }
-        if access_mode in valid_access_modes:
-            self.codex_access_mode = access_mode
-        valid_efforts = {
-            effort for effort, _label in self.CODEX_REASONING_EFFORTS
-        }
-        reasoning_efforts = data.get('reasoning_efforts')
-        if isinstance(reasoning_efforts, dict):
-            self.codex_reasoning_efforts = {
-                key: effort
-                for key, effort in reasoning_efforts.items()
-                if (
-                    isinstance(key, str)
-                    and 0 < len(key) <= 256
-                    and effort in valid_efforts
-                )
-            }
-
-    def _save_agent_settings(self) -> None:
-        """Persist confirmed F2 selections for later mon2 launches."""
-        if self.agent_settings_path is None:
-            return
-        try:
-            self.agent_settings_path.parent.mkdir(
-                parents=True, exist_ok=True)
-            temporary = self.agent_settings_path.with_name(
-                self.agent_settings_path.name + '.tmp')
-            temporary.write_text(
-                json.dumps({
-                    'version': 2,
-                    'model': self.codex_selected_model,
-                    'access_mode': self.codex_access_mode,
-                    'reasoning_efforts': self.codex_reasoning_efforts,
-                }, indent=2) + '\n',
-                encoding='utf-8',
-            )
-            temporary.replace(self.agent_settings_path)
-        except OSError as exc:
-            self.codex_messages.append((
-                'Codex',
-                f'- Could not save Agent settings: {exc}',
-            ))
-
-    def open_codex(self) -> None:
-        """Show the embedded Codex prompt without disturbing node selection."""
-        self.codex_active = True
-        self.codex_prompt = ''
-        self.codex_model_picker_active = False
-        self.codex_model_picker_stage = 'root'
-        self.codex_model_picker_pending_model = None
-        if not self.codex_running:
-            self.codex_status = 'Ready — ask about the selected node'
-        self.redraw()
-
-    def close_codex(self) -> None:
-        """Hide the Codex prompt while preserving its short conversation history."""
-        self.codex_active = False
-        self.codex_prompt = ''
-        self.codex_model_picker_active = False
-        self.codex_model_picker_stage = 'root'
-        self.codex_model_picker_pending_model = None
-        self.redraw()
-
-    def open_diagnosis(self) -> None:
-        """Show the live node-health table."""
-        self.diagnosis_active = True
-        self.diagnosis_prompt = ''
-        self.diagnosis_chat_focused = False
-        self.codex_model_picker_active = False
-        self.codex_model_picker_stage = 'root'
-        self.codex_model_picker_pending_model = None
-        self.diagnosis_selected = min(
-            self.diagnosis_selected, max(0, len(self.diagnosis_rows) - 1))
-        self.redraw()
-
-    def close_diagnosis(self) -> None:
-        """Hide the live node-health table."""
-        self.diagnosis_active = False
-        self.diagnosis_chat_focused = False
-        self.codex_model_picker_active = False
-        self.codex_model_picker_stage = 'root'
-        self.codex_model_picker_pending_model = None
-        self.redraw()
-
-    def set_diagnosis_rows(self, rows) -> None:
-        """Replace the diagnosis table with a fresh health snapshot."""
-        self.diagnosis_rows = list(rows)
-        self.diagnosis_selected = min(
-            self.diagnosis_selected, max(0, len(self.diagnosis_rows) - 1))
-        self.redraw()
-
-    def set_diagnosis_running(self, running: bool) -> None:
-        """Update the diagnosis agent activity indicator."""
-        self.diagnosis_running = running
-        if running:
-            self._start_codex_spinner()
-        elif not self.codex_running and not self.diagnosis_chat_running:
-            self._stop_codex_spinner()
-        self.redraw()
-
-    def set_diagnosis_chat_running(self, running: bool) -> None:
-        """Update activity for a Human-started Diagnosis conversation turn."""
-        if (
-                running
-                and not self.diagnosis_chat_running
-                and self.diagnosis_execution_label is None):
-            self.diagnosis_execution_label = 'Thinking'
-        self.diagnosis_chat_running = running
-        if running:
-            self._start_codex_spinner()
-        else:
-            self._complete_agent_execution('diagnosis')
-            if not self.codex_running and not self.diagnosis_running:
-                self._stop_codex_spinner()
-        self.redraw()
-
-    def set_diagnosis_summary(self, text: str) -> None:
-        """Store the hidden agent result for diagnostics and tests."""
-        clean = text.replace('\r\n', '\n').replace('\r', '\n').replace('\x1b', '')
-        self.diagnosis_summary = [
-            line.strip() for line in clean.splitlines() if line.strip()
-        ][-self.DIAGNOSIS_SUMMARY_LINES:]
-
-    def set_codex_running(self, running: bool, status: str) -> None:
-        """Update the small live status indicator in the Codex panel."""
-        if (
-                running
-                and not self.codex_running
-                and self.codex_execution_label is None):
-            self.codex_execution_label = 'Thinking'
-        self.codex_running = running
-        self.codex_status = status
-        if running:
-            self._start_codex_spinner()
-        else:
-            self._complete_agent_execution('agent')
-            if not self.diagnosis_running and not self.diagnosis_chat_running:
-                self._stop_codex_spinner()
-        self.redraw()
-
-    def _complete_agent_execution(self, mode: str) -> None:
-        """Move a finished activity into the retained conversation timeline."""
-        if mode == 'diagnosis':
-            label = self.diagnosis_execution_label
-            messages = self.diagnosis_messages
-            self.diagnosis_execution_label = None
-        else:
-            label = self.codex_execution_label
-            messages = self.codex_messages
-            self.codex_execution_label = None
-        if label is not None:
-            if label == 'Thinking':
-                label = 'Prepared response'
-            elif label.startswith('Thinking:'):
-                label = label.removeprefix('Thinking:').strip()
-            messages.append(('Activity', f'✓ {label}'))
-
-    def set_agent_execution(
-            self, mode: str, label: Optional[str]) -> None:
-        """Advance the retained Agent activity timeline."""
-        if label is not None:
-            label = ' '.join(
-                label.replace('\x1b', '').replace('\x00', '').split())
-            label = label[:240].strip() or None
-        previous = (
-            self.diagnosis_execution_label
-            if mode == 'diagnosis' else
-            self.codex_execution_label
-        )
-        updating_reasoning_summary = (
-            previous is not None
-            and label is not None
-            and (
-                previous == 'Thinking'
-                or previous.startswith('Thinking:')
-            )
-            and label.startswith('Thinking:')
-        )
-        if (
-                previous is not None
-                and previous != label
-                and not updating_reasoning_summary):
-            self._complete_agent_execution(mode)
-        if mode == 'diagnosis':
-            self.diagnosis_execution_label = label
-        else:
-            self.codex_execution_label = label
-        if label is not None:
-            self._start_codex_spinner()
-        self.redraw()
-
-    def set_codex_usage(
-            self, remaining_percent: Optional[int], *, loading: bool = False
-            ) -> None:
-        """Update the authenticated Codex rate-limit percentage."""
-        self.codex_usage_remaining = remaining_percent
-        self.codex_usage_loading = loading
-        self.redraw()
-
-    def set_codex_models(self, models, *, loading: bool = False) -> None:
-        """Store the visible models advertised by the installed Codex CLI."""
-        cleaned = []
-        seen = set()
-        valid_efforts = {
-            effort for effort, _label in self.CODEX_REASONING_EFFORTS
-        }
-        for item in models:
-            if not isinstance(item, dict):
-                continue
-            model = item.get('model')
-            if not isinstance(model, str) or not model or model in seen:
-                continue
-            seen.add(model)
-            display_name = item.get('display_name')
-            supported_efforts = []
-            for effort_item in item.get('supported_reasoning_efforts', ()):
-                effort = (
-                    (
-                        effort_item.get('reasoning_effort')
-                        or effort_item.get('reasoningEffort')
-                    )
-                    if isinstance(effort_item, dict) else
-                    effort_item
-                )
-                if effort in valid_efforts and effort not in supported_efforts:
-                    supported_efforts.append(effort)
-            default_effort = item.get('default_reasoning_effort')
-            if default_effort not in valid_efforts:
-                default_effort = self.DEFAULT_CODEX_REASONING_EFFORT
-            cleaned.append({
-                'model': model,
-                'display_name': (
-                    display_name
-                    if isinstance(display_name, str) and display_name
-                    else model
-                ),
-                'is_default': bool(item.get('is_default')),
-                'supported_reasoning_efforts': tuple(supported_efforts),
-                'default_reasoning_effort': default_effort,
-            })
-        self.codex_models = cleaned
-        self.codex_models_loading = loading
-        available = {item['model'] for item in cleaned}
-        if self.codex_selected_model not in available:
-            self.codex_selected_model = None
-        if self.codex_model_picker_stage == 'model':
-            self.codex_model_picker_selected = self._codex_model_choice_index(
-                self.codex_selected_model)
-        self.redraw()
-
-    def set_codex_models_loading(self, loading: bool) -> None:
-        self.codex_models_loading = loading
-        self.redraw()
-
-    def set_codex_login_state(self, logged_in: Optional[bool]) -> None:
-        """Update the account action shown in the F2 settings menu."""
-        self.codex_logged_in = logged_in
-        self.redraw()
-
-    def _codex_model_choices(self):
-        default_model = next(
-            (item for item in self.codex_models if item['is_default']),
-            None,
-        )
-        choices = [{
-            'model': None,
-            'display_name': 'Codex default',
-            'is_default': True,
-            'supported_reasoning_efforts': (
-                default_model['supported_reasoning_efforts']
-                if default_model is not None else ()
-            ),
-            'default_reasoning_effort': (
-                default_model['default_reasoning_effort']
-                if default_model is not None else
-                self.DEFAULT_CODEX_REASONING_EFFORT
-            ),
-        }] + self.codex_models
-        available = {item['model'] for item in choices}
-        if (
-                self.codex_selected_model is not None
-                and self.codex_selected_model not in available):
-            choices.append({
-                'model': self.codex_selected_model,
-                'display_name': self.codex_model_label(),
-                'is_default': False,
-                'supported_reasoning_efforts': (),
-                'default_reasoning_effort': (
-                    self.DEFAULT_CODEX_REASONING_EFFORT),
-            })
-        return choices
-
-    def _codex_model_choice_index(self, model: Optional[str]) -> int:
-        for index, choice in enumerate(self._codex_model_choices()):
-            if choice['model'] == model:
-                return index
-        return 0
-
-    def codex_model_label(self) -> str:
-        """Return a short label for the model used by new Agent turns."""
-        if self.codex_selected_model is None:
-            for item in self.codex_models:
-                if item['is_default']:
-                    return item['display_name']
-            return self.DEFAULT_CODEX_MODEL_LABEL
-        if self.codex_selected_model == self.DEFAULT_CODEX_MODEL:
-            return self.DEFAULT_CODEX_MODEL_LABEL
-        for item in self.codex_models:
-            if item['model'] == self.codex_selected_model:
-                return item['display_name']
-        return self.codex_selected_model
-
-    @staticmethod
-    def _codex_reasoning_key(model: Optional[str]) -> str:
-        return model if model is not None else '__default__'
-
-    def _codex_model_choice(self, model: Optional[str]):
-        return next(
-            (
-                choice for choice in self._codex_model_choices()
-                if choice['model'] == model
-            ),
-            None,
-        )
-
-    def codex_reasoning_effort_for_model(
-            self, model: Optional[str]) -> str:
-        """Return the persisted, supported thinking level for one model."""
-        choice = self._codex_model_choice(model)
-        supported = (
-            choice['supported_reasoning_efforts']
-            if choice is not None else ()
-        )
-        configured = self.codex_reasoning_efforts.get(
-            self._codex_reasoning_key(model))
-        if configured is not None and (
-                not supported or configured in supported):
-            return configured
-        if self.DEFAULT_CODEX_REASONING_EFFORT in supported or not supported:
-            return self.DEFAULT_CODEX_REASONING_EFFORT
-        default = (
-            choice['default_reasoning_effort']
-            if choice is not None else None
-        )
-        return default if default in supported else supported[0]
-
-    def codex_reasoning_effort(self) -> str:
-        """Return the thinking level used by new Agent and Diagnosis turns."""
-        return self.codex_reasoning_effort_for_model(
-            self.codex_selected_model)
-
-    def codex_reasoning_label(self, model: Optional[str]) -> str:
-        effort = self.codex_reasoning_effort_for_model(model)
-        return next(
-            (
-                label for value, label in self.CODEX_REASONING_EFFORTS
-                if value == effort
-            ),
-            effort,
-        )
-
-    def _codex_reasoning_choices(self, model: Optional[str]):
-        choice = self._codex_model_choice(model)
-        supported = (
-            choice['supported_reasoning_efforts']
-            if choice is not None else ()
-        )
-        allowed = (
-            supported
-            if supported else
-            ('low', 'medium', 'high', 'xhigh')
-        )
-        labels = dict(self.CODEX_REASONING_EFFORTS)
-        return [
-            {
-                'kind': 'reasoning',
-                'effort': effort,
-                'display_name': labels.get(effort, effort),
-            }
-            for effort in allowed
-        ]
-
-    @staticmethod
-    def _codex_access_choices():
-        return [
-            {
-                'mode': 'approve-for-me',
-                'display_name': 'Approve for me',
-                'description': 'Codex auto-reviews applicable approvals',
-            },
-            {
-                'mode': 'full-access',
-                'display_name': 'Full access',
-                'description': 'No sandbox or approval prompts',
-            },
-        ]
-
-    def _codex_account_choices(self):
-        if self.codex_logged_in is True:
-            return [{
-                'action': 'logout',
-                'display_name': 'Log out',
-                'description': 'Remove the stored Codex login',
-            }]
-        return [{
-                'action': 'login',
-                'display_name': 'Log in',
-                'description': 'Open the browser to sign in to Codex',
-        }]
-
-    def _codex_picker_root_choices(self):
-        account = self._codex_account_choices()[0]
-        return [
-            {
-                'kind': 'models',
-                'display_name': 'Models',
-                'description': self.codex_model_label(),
-            },
-            {
-                'kind': 'permissions',
-                'display_name': 'Permissions',
-                'description': next(
-                    choice['display_name']
-                    for choice in self._codex_access_choices()
-                    if choice['mode'] == self.codex_access_mode
-                ),
-            },
-            {'kind': 'account', **account},
-        ]
-
-    def _codex_picker_choices(self):
-        """Return choices for the active F2 settings category."""
-        if self.codex_model_picker_stage == 'model':
-            return [
-                {'kind': 'model', **choice}
-                for choice in self._codex_model_choices()
-            ]
-        if self.codex_model_picker_stage == 'access':
-            return [
-                {'kind': 'access', **choice}
-                for choice in self._codex_access_choices()
-            ]
-        if self.codex_model_picker_stage == 'reasoning':
-            return self._codex_reasoning_choices(
-                self.codex_model_picker_pending_model)
-        return self._codex_picker_root_choices()
-
-    def open_codex_model_picker(self) -> None:
-        self.codex_model_picker_active = True
-        self.codex_model_picker_stage = 'root'
-        self.codex_model_picker_selected = 0
-        self.codex_model_picker_pending_model = None
-        self.redraw()
-
-    def open_codex_login_option(self) -> None:
-        """Open Agent settings with the current account action highlighted."""
-        self.open_codex_model_picker()
-        self.codex_model_picker_selected = next(
-            (
-                index
-                for index, choice in enumerate(
-                    self._codex_picker_root_choices())
-                if choice['kind'] == 'account'
-            ),
-            0,
-        )
-        self.redraw()
-
-    def close_codex_model_picker(self) -> None:
-        self.codex_model_picker_active = False
-        self.codex_model_picker_stage = 'root'
-        self.codex_model_picker_pending_model = None
-        self.redraw()
-
-    def back_codex_model_picker(self) -> bool:
-        """Return to settings categories, or report that the picker should close."""
-        if self.codex_model_picker_stage == 'root':
-            return False
-        if self.codex_model_picker_stage == 'reasoning':
-            self.codex_model_picker_stage = 'model'
-            self.codex_model_picker_selected = self._codex_model_choice_index(
-                self.codex_model_picker_pending_model)
-        else:
-            self.codex_model_picker_stage = 'root'
-            self.codex_model_picker_selected = 0
-            self.codex_model_picker_pending_model = None
-        self.redraw()
-        return True
-
-    def move_codex_model_selection(self, amount: int) -> None:
-        choices = self._codex_picker_choices()
-        if not choices:
-            return
-        self.codex_model_picker_selected = max(
-            0,
-            min(
-                len(choices) - 1,
-                self.codex_model_picker_selected + amount,
-            ),
-        )
-        self.redraw()
-
-    def apply_codex_model_selection(self) -> Optional[str]:
-        choices = self._codex_picker_choices()
-        if not choices:
-            return None
-        index = min(self.codex_model_picker_selected, len(choices) - 1)
-        choice = choices[index]
-        action = None
-        if choice['kind'] == 'models':
-            self.codex_model_picker_stage = 'model'
-            self.codex_model_picker_selected = self._codex_model_choice_index(
-                self.codex_selected_model)
-        elif choice['kind'] == 'permissions':
-            self.codex_model_picker_stage = 'access'
-            self.codex_model_picker_selected = next(
-                (
-                    index
-                    for index, access in enumerate(
-                        self._codex_access_choices())
-                    if access['mode'] == self.codex_access_mode
-                ),
-                0,
-            )
-        elif choice['kind'] == 'model':
-            self.codex_model_picker_pending_model = choice['model']
-            self.codex_model_picker_stage = 'reasoning'
-            current_effort = self.codex_reasoning_effort_for_model(
-                choice['model'])
-            self.codex_model_picker_selected = next(
-                (
-                    index
-                    for index, reasoning in enumerate(
-                        self._codex_reasoning_choices(choice['model']))
-                    if reasoning['effort'] == current_effort
-                ),
-                0,
-            )
-        elif choice['kind'] == 'reasoning':
-            model = self.codex_model_picker_pending_model
-            self.codex_selected_model = model
-            self.codex_reasoning_efforts[
-                self._codex_reasoning_key(model)] = choice['effort']
-            self._save_agent_settings()
-            self.codex_model_picker_stage = 'root'
-            self.codex_model_picker_selected = 0
-            self.codex_model_picker_pending_model = None
-        elif choice['kind'] == 'access':
-            self.codex_access_mode = choice['mode']
-            self._save_agent_settings()
-            self.codex_model_picker_stage = 'root'
-            self.codex_model_picker_selected = 1
-        else:
-            action = choice['action']
-            self.codex_model_picker_active = False
-            self.codex_model_picker_stage = 'root'
-            self.codex_model_picker_pending_model = None
-        self.redraw()
-        return action
-
-    def _start_codex_spinner(self) -> None:
-        """Animate Codex activity without blocking launch or log processing."""
-        if (self._loop is not None and self._codex_spinner_timer is None
-                and (
-                    self.codex_running
-                    or self.diagnosis_running
-                    or self.diagnosis_chat_running
-                    or self.codex_execution_label is not None
-                    or self.diagnosis_execution_label is not None
-                )):
-            self._codex_spinner_timer = self._loop.call_later(
-                self.CODEX_SPINNER_INTERVAL, self._advance_codex_spinner)
-
-    def _advance_codex_spinner(self) -> None:
-        self._codex_spinner_timer = None
-        if not (
-                self.codex_running
-                or self.diagnosis_running
-                or self.diagnosis_chat_running
-                or self.codex_execution_label is not None
-                or self.diagnosis_execution_label is not None):
-            return
-        self._codex_spinner_index = (
-            self._codex_spinner_index + 1
-        ) % len(self.CODEX_SPINNER_FRAMES)
-        if self.codex_active or self.diagnosis_active:
-            self.redraw()
-        self._start_codex_spinner()
-
-    def _stop_codex_spinner(self) -> None:
-        if self._codex_spinner_timer is not None:
-            self._codex_spinner_timer.cancel()
-            self._codex_spinner_timer = None
-        self._codex_spinner_index = 0
-
-    def add_codex_message(self, speaker: str, text: str) -> None:
-        """Append terminal-safe transcript output below the node list."""
-        clean = text.replace('\r\n', '\n').replace('\r', '\n').replace('\x1b', '')
-        lines = [line.strip() for line in clean.splitlines() if line.strip()]
-        if not lines:
-            return
-        for line in lines:
-            self.codex_messages.append((speaker, line))
-        if speaker in ('You', 'Human'):
-            self.codex_scroll_offset = 0
-        self.redraw()
-
-    def begin_codex_stream(self) -> None:
-        """Prepare one progressively rendered Agent response."""
-        self._complete_agent_execution('agent')
-        self.codex_stream_text = ''
-        self._request_redraw()
-
-    def append_codex_stream(self, text: str) -> None:
-        """Append a terminal-safe response chunk and schedule a bounded redraw."""
-        clean = text.replace('\r\n', '\n').replace('\r', '\n').replace('\x1b', '')
-        clean = ''.join(
-            character for character in clean
-            if character in ('\n', '\t') or ord(character) >= 32
-        )
-        if not clean:
-            return
-        self.codex_stream_text += clean
-        self._request_redraw()
-
-    def finish_codex_stream(self, speaker: str, text: str) -> None:
-        """Atomically replace the live response with its retained final text."""
-        self._complete_agent_execution('agent')
-        self.codex_stream_text = ''
-        self.add_codex_message(speaker, text)
-
-    def clear_codex_stream(self) -> None:
-        """Discard an unfinished response after cancellation or failure."""
-        if not self.codex_stream_text:
-            return
-        self.codex_stream_text = ''
-        self._request_redraw()
-
-    def add_diagnosis_message(self, speaker: str, text: str) -> None:
-        """Keep a separate terminal-safe Diagnosis conversation."""
-        clean = text.replace('\r\n', '\n').replace('\r', '\n').replace('\x1b', '')
-        lines = [line.strip() for line in clean.splitlines() if line.strip()]
-        for line in lines:
-            self.diagnosis_messages.append((speaker, line))
-        if lines:
-            if speaker in ('You', 'Human'):
-                self.diagnosis_chat_scroll_offset = 0
-            self.redraw()
-
-    def begin_diagnosis_stream(self) -> None:
-        self._complete_agent_execution('diagnosis')
-        self.diagnosis_stream_text = ''
-        self._request_redraw()
-
-    def append_diagnosis_stream(self, text: str) -> None:
-        clean = text.replace('\r\n', '\n').replace('\r', '\n').replace('\x1b', '')
-        clean = ''.join(
-            character for character in clean
-            if character in ('\n', '\t') or ord(character) >= 32
-        )
-        if clean:
-            self.diagnosis_stream_text += clean
-            self._request_redraw()
-
-    def finish_diagnosis_stream(self, speaker: str, text: str) -> None:
-        self._complete_agent_execution('diagnosis')
-        self.diagnosis_stream_text = ''
-        self.add_diagnosis_message(speaker, text)
-
-    def clear_diagnosis_stream(self) -> None:
-        if self.diagnosis_stream_text:
-            self.diagnosis_stream_text = ''
-            self._request_redraw()
-
-    def scroll_diagnosis_chat(self, amount: int) -> None:
-        maximum = max(
-            0,
-            self._diagnosis_chat_rendered_line_count
-            - self.DIAGNOSIS_CHAT_VISIBLE_LINES,
-        )
-        self.diagnosis_chat_scroll_offset = max(
-            0, min(maximum, self.diagnosis_chat_scroll_offset + amount))
-        self.redraw()
-
-    def scroll_codex(self, amount: int) -> None:
-        """Move through retained Codex transcript lines without terminal scrollback."""
-        maximum = max(
-            0, self._codex_rendered_line_count - self.CODEX_VISIBLE_LINES)
-        self.codex_scroll_offset = max(
-            0, min(maximum, self.codex_scroll_offset + amount))
-        self.redraw()
 
     def start(self, loop) -> None:
         """Enter raw input mode and register the keyboard reader."""
@@ -994,7 +154,6 @@ class TerminalUI:
 
     def close(self, loop=None) -> None:
         """Restore the user's terminal even when launch was interrupted."""
-        self._stop_codex_spinner()
         if self._output_timer is not None:
             self._output_timer.cancel()
             self._output_timer = None
@@ -1005,7 +164,7 @@ class TerminalUI:
         if loop is not None:
             try:
                 loop.remove_reader(sys.stdin.fileno())
-            except Exception:
+            except (OSError, RuntimeError, ValueError):
                 pass
         if self._escape_timer is not None:
             self._escape_timer.cancel()
@@ -1087,16 +246,10 @@ class TerminalUI:
         return {
             State.RUNNING: cls.RUNNING,
             State.CRASHED: cls.CRASHED,
-            State.WAITING: cls.WAITING,
-            State.IDLE: cls.IDLE,
+            State.STARTING: cls.WAITING,
+            State.STOPPING: cls.WAITING,
+            State.STOPPED: cls.IDLE,
         }[state]
-
-    @classmethod
-    def record_style(cls, record: ProcessRecord):
-        """Use orange only for a running Agent-created node."""
-        if record.agent_created and record.state == State.RUNNING:
-            return cls.AGENT_CREATED
-        return cls.state_style(record.state)
 
     def log(self, source: str, text: str, is_stderr: bool = False,
             severity: Optional[str] = None) -> None:
@@ -1278,16 +431,14 @@ class TerminalUI:
             menu = self.BAR + f' Searching for: {self.search_query}'
         elif self.selected is None:
             menu = self._menu_item(
-                'A-Z', 'Namespace actions' if showing_namespaces else 'Node select')
-            menu += self._menu_item('F3', 'Diagnosis')
-            menu += self._menu_item('F4', 'Agent')
+                'A-Z', 'Namespace actions' if showing_namespaces else 'Node actions')
             menu += self._menu_item(
-                'F5', 'Node mode' if self.namespace_mode else 'Namespace view')
+                'F5', 'Node mode' if self.namespace_mode else 'Namespace mode')
             if self.namespace_mode and self.namespace_inspect is not None:
                 menu += self._menu_item('Backspace', 'Namespaces')
             menu += self._menu_item('F6', 'Start all')
             menu += self._menu_item('F7', 'Stop all')
-            menu += self._menu_item('F8', 'Toggle Warn+')
+            menu += self._menu_item('F8', 'Toggle WARN+ only')
             menu += self._menu_item('F9', 'Mute all')
             menu += self._menu_item('F10', 'Unmute all')
             menu += self._menu_item('/', 'Node search')
@@ -1316,7 +467,6 @@ class TerminalUI:
                     return self.redraw()
                 record = records[self.selected]
                 menu = self.BAR + f" Node '{record.display_name}' is {record.state.value}. Actions:"
-                menu += self._menu_item('F4', 'ask Agent')
                 menu += self._menu_item('s', 'start')
                 menu += self._menu_item('k', 'stop')
                 menu += self._menu_item('d', 'debug')
@@ -1325,7 +475,7 @@ class TerminalUI:
         menu = self._fit(menu, columns)
 
         if self.search_active:
-            entries = [(record.display_name, self.record_style(record), record.muted)
+            entries = [(record.display_name, self.state_style(record.state), record.muted)
                        for record in self.search_matches()]
         elif showing_namespaces:
             entries = []
@@ -1338,7 +488,7 @@ class TerminalUI:
                     bool(members) and all(record.muted for record in members),
                 ))
         else:
-            entries = [(record.display_name, self.record_style(record), record.muted)
+            entries = [(record.display_name, self.state_style(record.state), record.muted)
                        for record in self.visible_records()]
 
         blocks = []
@@ -1350,10 +500,7 @@ class TerminalUI:
                 if len(name) > max_name_length:
                     name = name[:max_name_length - 1] + '…'
                 label = f' {name} '
-                style = (
-                    self.SEARCH_SELECTED
-                    if self.search_selected == index else state_style
-                )
+                style = self.SEARCH_SELECTED if self.search_selected == index else ''
                 block = style + label + self.RESET
                 plain_len = len(label)
                 if self._visible_len(line) + plain_len + 1 > columns and line:
@@ -1393,10 +540,6 @@ class TerminalUI:
             blocks = [self.IDLE + message + self.RESET]
 
         lines = [sep, menu] + blocks
-        if self.codex_active:
-            lines.extend(self._codex_panel_lines(columns))
-        if self.diagnosis_active:
-            lines.extend(self._diagnosis_panel_lines(columns))
         self._render_cache_key = render_key
         self._render_cache_lines = tuple(lines)
         self._draw_status_lines(lines, prefix=erase)
@@ -1441,12 +584,7 @@ class TerminalUI:
 
     def _status_render_key(self, columns: int):
         records = tuple(
-            (
-                record.display_name,
-                record.state,
-                record.muted,
-                record.agent_created,
-            )
+            (record.display_name, record.state, record.muted)
             for record in self.records
         )
         return (
@@ -1459,375 +597,7 @@ class TerminalUI:
             self.search_query,
             self.search_selected,
             self.warn_only,
-            self.codex_active,
-            self.codex_prompt,
-            self.codex_status,
-            self.codex_running,
-            self.codex_usage_remaining,
-            self.codex_usage_loading,
-            tuple(
-                (
-                    item['model'],
-                    item['display_name'],
-                    item['is_default'],
-                    item['supported_reasoning_efforts'],
-                    item['default_reasoning_effort'],
-                )
-                for item in self.codex_models
-            ),
-            self.codex_models_loading,
-            self.codex_selected_model,
-            self.codex_model_picker_active,
-            self.codex_model_picker_selected,
-            self.codex_model_picker_stage,
-            self.codex_model_picker_pending_model,
-            tuple(sorted(self.codex_reasoning_efforts.items())),
-            self.codex_access_mode,
-            self.codex_logged_in,
-            self._codex_spinner_index,
-            self.codex_scroll_offset,
-            tuple(self.codex_messages),
-            self.codex_stream_text,
-            self.codex_execution_label,
-            self.diagnosis_active,
-            self.diagnosis_selected,
-            self.diagnosis_chat_focused,
-            tuple(
-                tuple(sorted(row.items())) for row in self.diagnosis_rows
-            ),
-            self.diagnosis_running,
-            self.diagnosis_prompt,
-            tuple(self.diagnosis_messages),
-            self.diagnosis_stream_text,
-            self.diagnosis_execution_label,
-            self.diagnosis_chat_running,
-            self.diagnosis_chat_scroll_offset,
         )
-
-    @staticmethod
-    def _diagnosis_cell(value, width: int) -> str:
-        """Fit one plain table cell without breaking the table columns."""
-        text = str(value)
-        if len(text) > width:
-            text = text[:max(1, width - 1)] + '…'
-        return text.ljust(width)
-
-    @classmethod
-    def _highlight_hardware_names(
-            cls, text: str, restore_style: Optional[str] = None) -> str:
-        """Give recognized hardware families distinct, stable colors."""
-        restore = restore_style or cls.BAR
-        for pattern, color in HARDWARE_HIGHLIGHTS:
-            text = pattern.sub(
-                lambda match, style=color: (
-                    style + match.group(0) + cls.RESET + restore
-                ),
-                text,
-            )
-        return text
-
-    def _diagnosis_panel_lines(self, columns: int):
-        """Render only the selectable nodes that currently need attention."""
-        rows = self.diagnosis_rows
-        selected = min(self.diagnosis_selected, max(0, len(rows) - 1))
-        self.diagnosis_selected = selected
-        visible_count = min(self.DIAGNOSIS_VISIBLE_ROWS, len(rows))
-        start = max(0, selected - visible_count + 1)
-        start = min(start, max(0, len(rows) - visible_count))
-        visible_rows = rows[start:start + visible_count]
-
-        # Reserve useful widths for both the full node identity and diagnosis.
-        fixed = 30
-        flexible = max(20, columns - fixed)
-        node_width = max(10, min(34, flexible * 3 // 5))
-        detail_width = max(10, flexible - node_width)
-        header = (
-            f" Key | {self._diagnosis_cell('Node', node_width)} | "
-            f"{self._diagnosis_cell('State', 8)} | "
-            f"{self._diagnosis_cell('Errors', 6)} | "
-            f"{self._diagnosis_cell('What might be wrong', detail_width)}"
-        )
-        divider = (
-            '-----+' + ('-' * (node_width + 2)) + '+'
-            + ('-' * 10) + '+' + ('-' * 8) + '+'
-            + ('-' * (detail_width + 2))
-        )
-        title = self.BAR + ' Diagnosis'
-        if self.diagnosis_running:
-            spinner = self.CODEX_SPINNER_FRAMES[self._codex_spinner_index]
-            title += f' — Agent {spinner} checking lifecycle change…'
-        elif rows:
-            title += f' — {len(rows)} node(s) need attention'
-
-        lines = [self._fit(title + self.RESET, columns)]
-        lines.append(self._fit(self.BAR + header + self.RESET, columns))
-        lines.append(self._fit(self.BAR + divider + self.RESET, columns))
-        if not visible_rows:
-            message = (
-                ' - All nodes are healthy.'
-                if self.records else
-                ' - Waiting for processes.'
-            )
-            lines.append(self._fit(
-                self.BAR + message + self.RESET, columns))
-        for offset, row in enumerate(visible_rows):
-            index = start + offset
-            marker = '>' if index == selected else ' '
-            key = row.get('selection_key', ' ')
-            text = (
-                f"{marker}{key}  | "
-                f"{self._diagnosis_cell('/' + row['name'].lstrip('/'), node_width)} | "
-                f"{self._diagnosis_cell(row['state'], 8)} | "
-                f"{self._diagnosis_cell(row['errors'], 6)} | "
-                f"{self._diagnosis_cell(row['detail'], detail_width)}"
-            )
-            style = (
-                self.NODE_SELECTED
-                if index == selected and not self.diagnosis_chat_focused
-                else self.BAR
-            )
-            lines.append(self._fit(style + text + self.RESET, columns))
-        if self.codex_model_picker_active:
-            lines.extend(self._codex_model_picker_lines(columns))
-            return lines
-        transcript = self._chat_transcript_lines(
-            self.diagnosis_messages,
-            self.diagnosis_stream_text,
-            columns,
-        )
-        previous_count = self._diagnosis_chat_rendered_line_count
-        if (
-                self.diagnosis_chat_scroll_offset > 0
-                and len(transcript) > previous_count):
-            self.diagnosis_chat_scroll_offset += (
-                len(transcript) - previous_count)
-        self._diagnosis_chat_rendered_line_count = len(transcript)
-        maximum = max(
-            0, len(transcript) - self.DIAGNOSIS_CHAT_VISIBLE_LINES)
-        self.diagnosis_chat_scroll_offset = min(
-            self.diagnosis_chat_scroll_offset, maximum)
-        end = len(transcript) - self.diagnosis_chat_scroll_offset
-        chat_start = max(0, end - self.DIAGNOSIS_CHAT_VISIBLE_LINES)
-        visible_chat = transcript[chat_start:end]
-        for text in visible_chat:
-            lines.append(self._fit(self.BAR + text + self.RESET, columns))
-        if (
-                self.diagnosis_execution_label is not None
-                or (
-                    self.diagnosis_chat_running
-                    and not self.diagnosis_stream_text.strip()
-                )):
-            lines.extend(self._agent_activity_lines(
-                columns, self.diagnosis_execution_label))
-        if self.diagnosis_chat_focused:
-            focus_controls = 'Agent  Tab: agent/table mode'
-        else:
-            focus_controls = (
-                'Table  ↑/↓: select  Tab: agent/table mode')
-        controls = (
-            f' {focus_controls}  R: restart node  K: stop node  '
-            'N: restart namespace  X: stop namespace  F3/Esc: close '
-        )
-        lines.append(self._fit(self.BAR + controls + self.RESET, columns))
-        usage = (
-            '--%'
-            if self.codex_usage_loading or self.codex_usage_remaining is None
-            else f'{self.codex_usage_remaining}%'
-        )
-        prompt = f' > {self.diagnosis_prompt}'
-        prompt += '█' if not self.diagnosis_chat_running else ''
-        model = f'F2: {self.codex_model_label()}'
-        maximum_model_width = max(
-            0, columns - len(usage) - 6)
-        if len(model) > maximum_model_width:
-            model = (
-                model[:max(1, maximum_model_width - 1)] + '…'
-                if maximum_model_width else ''
-            )
-        right = f'{model}  {usage}' if model else usage
-        prompt_width = max(0, columns - len(right) - 1)
-        prompt = prompt[:prompt_width]
-        spacing = max(1, columns - len(prompt) - len(right))
-        input_line = self.BAR + prompt + (' ' * spacing) + right + self.RESET
-        lines.append(self._fit(input_line, columns))
-        return lines
-
-    def _chat_transcript_lines(self, messages, stream_text: str, columns: int):
-        """Wrap one Human/Rosmon transcript for either interactive mode."""
-        transcript = []
-
-        def append_message(speaker: str, message: str) -> None:
-            prefix = ' Human: ' if speaker == 'You' else ' Rosmon: '
-            available = max(10, columns - len(prefix))
-            wrapped = textwrap.wrap(
-                message,
-                width=available,
-                replace_whitespace=False,
-                drop_whitespace=True,
-                break_long_words=True,
-                break_on_hyphens=False,
-            ) or ['']
-            for index, part in enumerate(wrapped):
-                line_prefix = prefix if index == 0 else ' ' * len(prefix)
-                if speaker != 'You':
-                    part = self._highlight_hardware_names(part)
-                transcript.append(line_prefix + part)
-
-        for speaker, message in messages:
-            append_message(speaker, message)
-        if stream_text.strip():
-            stream_lines = [
-                line.strip()
-                for line in stream_text.splitlines()
-                if line.strip()
-            ]
-            for message in stream_lines or [stream_text]:
-                append_message('Codex', message)
-        return transcript
-
-    def _agent_activity_lines(
-            self, columns: int, label: Optional[str]):
-        """Render current activity on one stable-height spinner row."""
-        spinner = self.CODEX_SPINNER_FRAMES[self._codex_spinner_index]
-        activity = label or 'Preparing next step'
-        return [self._fit(
-            self.BAR
-            + f' Rosmon: {spinner} {activity}… '
-            + self.RESET,
-            columns,
-        )]
-
-    def _codex_panel_lines(self, columns: int):
-        """Render the compact, focused Codex conversation below the nodes."""
-        if self.codex_model_picker_active:
-            return self._codex_model_picker_lines(columns)
-        transcript = self._chat_transcript_lines(
-            self.codex_messages,
-            self.codex_stream_text,
-            columns,
-        )
-        previous_count = self._codex_rendered_line_count
-        if (
-                self.codex_scroll_offset > 0
-                and len(transcript) > previous_count):
-            self.codex_scroll_offset += len(transcript) - previous_count
-        self._codex_rendered_line_count = len(transcript)
-        maximum = max(0, len(transcript) - self.CODEX_VISIBLE_LINES)
-        self.codex_scroll_offset = min(self.codex_scroll_offset, maximum)
-        end = len(transcript) - self.codex_scroll_offset
-        start = max(0, end - self.CODEX_VISIBLE_LINES)
-        lines = []
-        visible_transcript = transcript[start:end]
-        for text in visible_transcript:
-            lines.append(self._fit(self.BAR + text + self.RESET, columns))
-        if (
-                self.codex_execution_label is not None
-                or (self.codex_running and not self.codex_stream_text.strip())):
-            lines.extend(self._agent_activity_lines(
-                columns, self.codex_execution_label))
-        usage = (
-            '--%'
-            if self.codex_usage_loading or self.codex_usage_remaining is None
-            else f'{self.codex_usage_remaining}%'
-        )
-        prompt = f' > {self.codex_prompt}'
-        prompt += '█' if not self.codex_running else ''
-        model = f'F2: {self.codex_model_label()}'
-        maximum_model_width = max(
-            0, columns - len(usage) - 6)
-        if len(model) > maximum_model_width:
-            model = (
-                model[:max(1, maximum_model_width - 1)] + '…'
-                if maximum_model_width else ''
-            )
-        right = f'{model}  {usage}' if model else usage
-        prompt_width = max(0, columns - len(right) - 1)
-        prompt = prompt[:prompt_width]
-        spacing = max(1, columns - len(prompt) - len(right))
-        input_line = self.BAR + prompt + (' ' * spacing) + right + self.RESET
-        lines.append(self._fit(input_line, columns))
-        return lines
-
-    def _codex_model_picker_lines(self, columns: int):
-        """Render settings categories or one nested settings list."""
-        choices = self._codex_picker_choices()
-        selected = min(
-            self.codex_model_picker_selected, max(0, len(choices) - 1))
-        self.codex_model_picker_selected = selected
-        visible_count = min(self.CODEX_MODEL_VISIBLE_ROWS, len(choices))
-        start = max(0, selected - visible_count + 1)
-        start = min(start, max(0, len(choices) - visible_count))
-        visible = choices[start:start + visible_count]
-        if self.codex_model_picker_stage == 'model':
-            title = ' Models'
-        elif self.codex_model_picker_stage == 'reasoning':
-            model_choice = self._codex_model_choice(
-                self.codex_model_picker_pending_model)
-            model_name = (
-                model_choice['display_name']
-                if model_choice is not None else
-                self.codex_model_label()
-            )
-            title = f' Thinking level — {model_name}'
-        elif self.codex_model_picker_stage == 'access':
-            title = ' Permissions'
-        else:
-            title = ' Agent settings'
-        if (
-                self.codex_models_loading
-                and self.codex_model_picker_stage == 'model'):
-            title += ' — loading available models…'
-        lines = [self._fit(self.BAR + title + self.RESET, columns)]
-        for offset, choice in enumerate(visible):
-            index = start + offset
-            marker = '>' if index == selected else ' '
-            suffix = ''
-            if choice['kind'] == 'models':
-                text = (
-                    f' {marker} {choice["display_name"]} › — '
-                    f'{choice["description"]}'
-                )
-            elif choice['kind'] == 'permissions':
-                text = (
-                    f' {marker} {choice["display_name"]} › — '
-                    f'{choice["description"]}'
-                )
-            elif choice['kind'] == 'access':
-                if choice['mode'] == self.codex_access_mode:
-                    suffix = ' (current)'
-                text = (
-                    f' {marker} {choice["display_name"]} — '
-                    f'{choice["description"]}{suffix}'
-                )
-            elif choice['kind'] == 'account':
-                text = (
-                    f' {marker} {choice["display_name"]} — '
-                    f'{choice["description"]}'
-                )
-            elif choice['kind'] == 'reasoning':
-                if choice['effort'] == self.codex_reasoning_effort_for_model(
-                        self.codex_model_picker_pending_model):
-                    suffix = ' (current)'
-                text = (
-                    f' {marker} {choice["display_name"]}{suffix}'
-                )
-            else:
-                if choice['model'] is not None and choice['is_default']:
-                    suffix = ' (CLI default)'
-                thinking = self.codex_reasoning_label(choice['model'])
-                text = (
-                    f' {marker} {choice["display_name"]}{suffix}'
-                    f' — {thinking} thinking'
-                )
-            style = self.NODE_SELECTED if index == selected else self.BAR
-            lines.append(self._fit(style + text + self.RESET, columns))
-        controls = (
-            ' ↑/↓: select  Enter: choose  Esc: close'
-            if self.codex_model_picker_stage == 'root' else
-            ' ↑/↓: select  Enter: choose  Esc: back'
-        )
-        lines.append(self._fit(self.BAR + controls + self.RESET, columns))
-        return lines
 
     def _draw_status_lines(self, lines, *, prefix: str = '') -> None:
         sys.stdout.write(prefix + self._status_text(lines))
@@ -1862,16 +632,9 @@ class TerminalUI:
             self._escape_timer.cancel()
             self._escape_timer = None
         self._buffer += data
-        # Consume the former F11 shortcut without inserting its escape
-        # sequence into the active prompt.
-        self._buffer = self._buffer.replace('\x1b[23~', '')
         keys = {
-            '\x1bOQ': 'F2', '\x1b[12~': 'F2', '\x1b[[B': 'F2',
-            '\x1bOR': 'F3', '\x1b[13~': 'F3', '\x1b[[C': 'F3',
-            '\x1bOS': 'F4', '\x1b[14~': 'F4', '\x1b[[D': 'F4',
             '\x1b[15~': 'F5', '\x1b[17~': 'F6', '\x1b[18~': 'F7', '\x1b[19~': 'F8',
             '\x1b[20~': 'F9', '\x1b[21~': 'F10',
-            '\x1b[5~': 'PAGE_UP', '\x1b[6~': 'PAGE_DOWN',
             '\x1b[A': 'UP', '\x1b[B': 'DOWN',
             '\x1b[C': 'RIGHT', '\x1b[D': 'LEFT',
         }

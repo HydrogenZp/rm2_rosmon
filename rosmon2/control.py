@@ -1,4 +1,4 @@
-"""Local Unix-socket transport shared by rosmon2's CLI and MCP adapter."""
+"""Local Unix-socket transport for the rosmon2 CLI."""
 
 import asyncio
 import json
@@ -50,7 +50,7 @@ def _encoded(message: Dict) -> bytes:
 
 
 class ControlClient:
-    """Synchronous client used by short-lived CLI and MCP commands."""
+    """Synchronous client used by short-lived CLI commands."""
 
     def __init__(self, session: str = 'default', timeout: float = 10.0):
         self.session = validate_session_name(session)
@@ -131,6 +131,7 @@ class ControlServer:
         self.path = session_socket_path(session)
         self._server = None
         self._subscribers = set()
+        self._clients = set()
 
     async def start(self) -> None:
         """Create the session socket, rejecting active name collisions."""
@@ -159,6 +160,10 @@ class ControlServer:
     async def close(self) -> None:
         """Stop accepting requests and remove the session socket."""
         self.supervisor.remove_event_listener(self.publish)
+        current = asyncio.current_task()
+        clients = [task for task in self._clients if task is not current]
+        for task in clients:
+            task.cancel()
         subscribers = list(self._subscribers)
         self._subscribers.clear()
         for writer in subscribers:
@@ -172,6 +177,8 @@ class ControlServer:
             self._server.close()
             await self._server.wait_closed()
             self._server = None
+        if clients:
+            await asyncio.gather(*clients, return_exceptions=True)
         try:
             self.path.unlink()
         except FileNotFoundError:
@@ -187,6 +194,9 @@ class ControlServer:
         return True
 
     async def _handle_client(self, reader, writer) -> None:
+        task = asyncio.current_task()
+        if task is not None:
+            self._clients.add(task)
         try:
             raw = await reader.readline()
             if not raw:
@@ -227,6 +237,8 @@ class ControlServer:
             response.setdefault('protocol_version', CONTROL_PROTOCOL_VERSION)
             await self._send(writer, response)
         finally:
+            if task is not None:
+                self._clients.discard(task)
             self._subscribers.discard(writer)
             writer.close()
             try:
