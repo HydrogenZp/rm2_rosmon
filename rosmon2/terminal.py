@@ -190,6 +190,15 @@ class TerminalUI:
         self._started = False
         self._loop = None
 
+    def pause_input(self) -> None:
+        """Stop accepting keyboard actions while preserving the footer."""
+        if self._loop is None or not self._started:
+            return
+        try:
+            self._loop.remove_reader(sys.stdin.fileno())
+        except (OSError, RuntimeError, ValueError):
+            pass
+
     def set_records(self, records: Iterable[ProcessRecord]) -> None:
         self.records = records
         names = tuple(record.display_name for record in records)

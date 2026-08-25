@@ -122,6 +122,9 @@ class Supervisor:
             if self._shutdown_complete:
                 return
             self._shutting_down = True
+            self.ui.pause_input()
+            if self._control_server is not None:
+                await self._control_server.close()
             await self.process_supervisor.shutdown()
             self.runtime.request_shutdown()
             self._shutdown_complete = True
