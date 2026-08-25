@@ -208,9 +208,24 @@ class ProcessSupervisor:
                 continue
             record.exit_code = -signal.SIGKILL
             record.expected_stop = True
-            record.state = ProcessState.STOPPED
-            self._notify(record, 'forced process termination')
+            await self._wait_pid_gone(pid, 1.0)
+            if record.pid == pid:
+                record.pid = None
+                record.state = ProcessState.STOPPED
+                self._notify(record, 'forced process termination')
         await self.wait_stopped(1.0)
+
+    @staticmethod
+    async def _wait_pid_gone(pid: int, timeout: float) -> None:
+        deadline = asyncio.get_running_loop().time() + timeout
+        while asyncio.get_running_loop().time() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return
+            except PermissionError:
+                return
+            await asyncio.sleep(0.05)
 
     async def wait_stopped(self, timeout: float) -> None:
         deadline = asyncio.get_running_loop().time() + max(0.0, timeout)
