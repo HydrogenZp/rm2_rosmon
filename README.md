@@ -154,9 +154,10 @@ By default, process output is also written to a timestamped file under
 
 ### JSON control output
 
-Every launch creates a private local Unix-socket session. Name the session so
-another terminal or script can inspect and control the same
-supervisor:
+Every launch creates a private local Unix-socket session. The default session
+name includes the launch process ID, so multiple monitors can run at once.
+Name the session when another terminal or script needs to inspect and control
+the same supervisor:
 
 ```bash
 # Terminal 1

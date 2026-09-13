@@ -4,9 +4,16 @@ import pytest
 
 from rosmon2.cli import (
     configure_ros_console_output,
+    launch_session_name,
     resolve_launch_spec,
     ROSMON_CONSOLE_OUTPUT_FORMAT,
 )
+
+
+def test_launch_session_is_unique_by_default(monkeypatch):
+    monkeypatch.setattr(os, 'getpid', lambda: 1234)
+    assert launch_session_name() == 'launch-1234'
+    assert launch_session_name('hardware') == 'hardware'
 
 
 def test_resolve_file_and_arguments(tmp_path):

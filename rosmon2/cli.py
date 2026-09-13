@@ -94,8 +94,8 @@ def make_parser() -> argparse.ArgumentParser:
     launch_parser.add_argument('--flush-stdout', action='store_true')
     launch_parser.add_argument('--name', help='accepted for rosmon CLI compatibility')
     launch_parser.add_argument(
-        '--session', default='default', metavar='NAME',
-        help='control session name (default: default)')
+        '--session', metavar='NAME',
+        help='control session name (default: unique launch session)')
     launch_parser.add_argument(
         '--json-events', action='store_true',
         help='emit structured JSONL events and disable the interactive UI')
@@ -182,6 +182,11 @@ def resolve_launch_spec(parts):
     raise ValueError('expected either a launch file path or PACKAGE FILE')
 
 
+def launch_session_name(session=None) -> str:
+    """Return an explicit session name or a unique name for this launch."""
+    return session or f'launch-{os.getpid()}'
+
+
 async def _run_supervisor(supervisor: Supervisor) -> int:
     loop = asyncio.get_running_loop()
     stopping = False
@@ -213,6 +218,7 @@ def main(argv=None) -> int:
         return _run_client_command(parser, args)
     if args.stop_timeout < 0:
         parser.error('--stop-timeout cannot be negative')
+    args.session = launch_session_name(args.session)
     try:
         validate_session_name(args.session)
     except ValueError as exc:
