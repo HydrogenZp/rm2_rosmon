@@ -1,0 +1,8 @@
+repos:
+  - repo: local
+    hooks:
+      - id: clang-tidy
+        name: clang-tidy
+        entry: clang-tidy -p ../../build --extra-arg=-w
+        language: system
+        files: \.(c|cc|cxx|cpp)$

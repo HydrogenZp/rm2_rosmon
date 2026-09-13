@@ -17,7 +17,6 @@ Checks:          '-*,
                   readability-identifier-naming,
                   '
 HeaderFilterRegex: ''
-AnalyzeTemporaryDtors: false
 CheckOptions:
   - key:             llvm-namespace-comment.ShortNamespaceLines
     value:           '10'
